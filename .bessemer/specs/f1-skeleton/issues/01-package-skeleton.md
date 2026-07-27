@@ -26,13 +26,30 @@ repository.** This is what gives CI a real gate even though the F1 tracer needs 
 Docker daemon. Write the constraint into `tests/README.md` or the top-level test module
 docstring so it survives the next author.
 
-Prove it by **blocking, not by environment**: patch the spawn and network paths
-(`socket`, `subprocess`, `os.system`, `os.popen`, `os.exec*`, `os.spawn*`,
-`os.posix_spawn`) to raise, so a test that reaches for either fails loudly. Stronger than
-stopping a daemon — it holds whatever state the machine is in, it is repeatable, and CI
-can enforce it. The guard must be proven in both directions: show a deliberate
-`socket.create_connection` and a deliberate `subprocess.run` each failing the suite before
-removing them.
+Prove it by **blocking, not by environment** — stronger than stopping a daemon, since it
+holds whatever state the machine is in, it is repeatable, and CI can enforce it. The guard
+lives in `tests/guard.py`, armed from `tests/__init__.py` before any test module imports,
+and has two halves:
+
+- **Network: banned outright.** No test in this project, at any issue, should open a
+  socket. Patch `socket` to raise.
+- **Spawns: an allowlist, not a ban.** Permitted: `git`, and `sys.executable` or the
+  installed console script (so tests can drive the CLI end to end). Everything else is
+  denied by omission — including `docker`, which is the actual constraint. Inspect argv;
+  do not replace `subprocess` wholesale.
+
+An allowlist rather than a docker-shaped blocklist, for the same reason the wrapper in
+issue 03 uses one: a blocklist loses to the next binary someone reaches for. When F3 needs
+docker in tests it must widen this list explicitly — a reviewable act, not a quiet
+loosening.
+
+`GuardViolation` subclasses `BaseException` so an `except Exception:` in code under test
+cannot swallow it.
+
+The guard must be proven failing: show a deliberate `socket.create_connection` and a
+deliberate denied spawn each erroring the suite, then remove them. Keep permanent
+regression tests asserting the guard is armed, including one proving a broad `except`
+cannot eat it.
 
 **Canonical invocation is `uv run python -m unittest discover`.** The package is always
 installed in the project environment, so `importlib.metadata` always resolves and the
@@ -52,9 +69,16 @@ will deliberately claim this slot later, so a test asserting it should expect to
 - [ ] `uvx --from . bessemer doctor` exits 0 (stub); `bessemer --help` lists only
       `doctor`; bare `bessemer` prints usage and exits 2
 - [ ] `uv run python -m unittest discover` passes from a clean checkout
-- [ ] Spawn and network paths are blocked during the suite, and the guard is demonstrated
-      failing on a deliberate `socket.create_connection` and a deliberate
-      `subprocess.run` before those are removed
+- [ ] Network is blocked during the suite; spawns are allowlisted to `git` and the
+      interpreter/console script, with everything else — docker included — denied
+- [ ] Guard demonstrated failing on a deliberate `socket.create_connection` and a
+      deliberate denied spawn, before those are removed
+- [ ] Permanent tests assert the guard is armed and that a broad `except Exception:`
+      cannot swallow a `GuardViolation`
+- [ ] Permanent tests prove the allowlist **passes through**, not merely that it denies —
+      a permitted program really spawns and its output is asserted. A guard tested only on
+      denials goes green while denying everything, which is the state in which the suite
+      has stopped testing anything at all
 - [ ] Suite passes when run from a directory outside any git work tree
 - [ ] No `skipTest` anywhere, and `__version__` has no fallback sentinel
 - [ ] `pyproject.toml` declares no runtime dependencies; `uv.lock` is committed

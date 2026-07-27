@@ -48,8 +48,9 @@ Allowlist rather than blocklist inside the wrapper is deliberate: a blocklist lo
 the next function someone finds.
 
 AST, not grep — grep is fooled by a docstring mentioning `shell=True` and misses
-`sh = True; run(..., shell=sh)`. The `tests/` tree is out of scope; tests legitimately
-need `subprocess` to drive the CLI end to end.
+`sh = True; run(..., shell=sh)`. The `tests/` tree is out of scope for the AST check;
+tests legitimately need `subprocess` to drive the CLI end to end, which issue 01's spawn
+allowlist permits (interpreter and console script are allowed; docker is not).
 
 ## Acceptance criteria
 

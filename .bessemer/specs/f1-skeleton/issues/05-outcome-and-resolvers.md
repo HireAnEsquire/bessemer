@@ -58,4 +58,6 @@ the wrong image.
 - [ ] `resolve_root_agreement` fails for `.bessemer/` above the git root, fails for below
       it, and passes when they match — all three tested with real temporary repos
 - [ ] Every git invocation goes through `bessemer.proc` with an explicit timeout
+- [ ] Tests spawn real `git` (permitted by issue 01's allowlist) against local temporary
+      repositories with no remotes — nothing reaches the network, which stays banned
 - [ ] No resolver raises on any tested failure path
