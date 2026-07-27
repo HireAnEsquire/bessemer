@@ -83,6 +83,12 @@ and that single requirement forces most of what follows.
   that never gets tired, and a plausible-but-wrong edit is exactly what a type error catches
   before a human reads the diff. The port source is already fully annotated, so `--strict` is
   realistic from the first commit rather than a later migration.
+- **One definition of "the checks", with three consumers.** `make check` runs pre-commit over all
+  files and then the test suite; CI invokes it verbatim, and from F3 the in-container implement
+  prompt runs the same command. A CI job enumerating its own steps would drift from the
+  pre-commit config, and the party hurt worst by that drift is the agent — it runs its command,
+  believes it is done, and finds the gap after the PR is open. The port source already works this
+  way, treating `pre-commit` as the gate an agent must pass before claiming completion.
 
 ## Consequences
 
