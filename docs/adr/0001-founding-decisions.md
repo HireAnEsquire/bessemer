@@ -11,13 +11,13 @@ says "port", it means port that revision's behavior, not redesign it.
 
 ## Context
 
-Bessemer dispatches AFK ("away from keyboard") coding agents. Per task it clones the target repo
+Bessemer dispatches AFK ("away from keyboard") coding agents. Per run it clones the target repo
 from origin, runs a Docker container built from the repo's own image, runs the agent CLI headless
 through an implement pass and then a reviewer pass with a verdict-break loop, pushes the branch
 from the host, and opens or updates a draft PR. The human is the merge gate, always.
 
-The founding invariant is **per-task test isolation**: each container gets its own throwaway
-database, so migrations and test databases cannot collide across concurrent tasks. That is the
+The founding invariant is **per-run test isolation**: each container gets its own throwaway
+database, so migrations and test databases cannot collide across concurrent runs. That is the
 capability no hosted alternative offered when this was surveyed (2026-07-20, 23 sources) —
 not Claude Code GitHub Actions, not the Copilot cloud agent, not Docker Sandboxes, not gh-aw,
 not Anthropic Managed Agents.
@@ -28,7 +28,7 @@ gathered 2026-07-24, define the core's assumptions:
 - **Heterogeneous stacks** — Django/React, Node (Next/SvelteKit), PHP. The core may assume
   nothing about language or test tooling.
 - **Not everyone has a compose-built image** to base the agent image on.
-- **Issue locations vary** — a configurable tasks directory is necessary, not optional.
+- **Issue locations vary** — a configurable specs directory is necessary, not optional.
 - **`main`/`master` is mixed** — base-branch auto-detection is necessary.
 - All adopter machines have node; all have some python3.
 
@@ -48,9 +48,12 @@ moment it will ever have. That question was pressure-tested rather than assumed 
   bash half is the untested half (all 337 tests cover the python helper — and every recent bug
   class was bash-specific: `set -e` AND-list semantics, quoting hazards); and the growth
   direction (config, provider abstraction, resume recovery, setup wizard) is data-shaped, not
-  pipe-shaped. Security surface shrinks: one subprocess wrapper controls every child's argv and
-  env, so there is no shell-interpolation surface. The python helper carries over largely intact
-  with its test suite.
+  pipe-shaped. Security surface shrinks: one subprocess wrapper controls every child's **argv** —
+  a list, never a string, never a shell — so the shell-interpolation surface disappears entirely.
+  The environment crossing into the container is a separate boundary, enforced by constructing
+  docker's `-e` arguments explicitly rather than forwarding host environment; host-side children
+  (`git`, `gh`) inherit the ambient environment because the push path genuinely needs it. The
+  python helper carries over largely intact with its test suite.
 - **Rejected: TypeScript/node.** Viable — all adopters have node, and node 22 type-stripping
   even removes the build step. Greenfield from zero it would be a real contest. But half the
   system is already tested python: port-to-python rewrites only the untested half,
@@ -96,7 +99,7 @@ moment it will ever have. That question was pressure-tested rather than assumed 
   interpreter; no PyPI publishing required. Every teammate runs the exact team-pinned version —
   the pin lives in a committed file, so the within-team version skew that killed plain
   tool-on-PATH cannot occur — and upgrading is a one-line reviewable ref bump. `.bessemer/` in a
-  consuming repo holds ONLY adapter files: Dockerfile, setup hook, config, prompt overrides, task
+  consuming repo holds ONLY adapter files: Dockerfile, setup hook, config, prompt overrides, spec
   content, runtime state. It is written by `init` once and never touched by any update path, so
   there is no clobber surface at all.
   - *Rejected: plain tool-on-PATH* — within-team version skew, and install infrastructure needed
@@ -109,12 +112,20 @@ moment it will ever have. That question was pressure-tested rather than assumed 
     bumping. Scaffold improvements don't auto-propagate either; a read-only `init --diff` shows
     adapter drift against current templates, for applying by hand.
 - **Config: two-layer TOML plus secrets env.** Committed `.bessemer/config.toml` carries
-  team-level facts (image, base, the source pin, `tasks_dir` when a team keeps shared issues
+  team-level facts (image, base, the source pin, `specs_dir` when a team keeps shared specs
   in-repo). Gitignored `.bessemer/config.local.toml` carries dev-owned values (notify, model,
-  provider, `tasks_dir` under the local-issues model, machine limits). Any key is valid at either
+  provider, `specs_dir` under the local-specs model, machine limits). Any key is valid at either
   layer; local wins. Secrets stay in a gitignored `.bessemer/.env` only. Precedence:
   **CLI flags > `BESSEMER_*` env vars > local > committed > auto-detect / defaults**, where
   auto-detect covers the base branch (from `origin/HEAD`).
+  - **One documented exception to "any key at either layer": `container_env_keys`, the list of
+    environment variable names permitted to cross into the container, is committed-layer only.**
+    Doctor FAILs if it appears in `config.local.toml`. The point of naming keys in a shared,
+    committed file is that widening the container's secret boundary is a reviewable diff; a
+    gitignored override would erase exactly that property, silently, on one machine. Names are
+    public, values are private — the values themselves never leave the gitignored `.env`.
+    Bessemer's own credential names are built-in defaults, so an adopter who needs nothing extra
+    never encounters this key at all.
 - **Prompts: package defaults, per-repo overrides.** Prompt templates ship inside the package; a
   same-named file under `.bessemer/prompts/` wins at read time. Users edit freely without
   forking, un-overridden defaults keep improving with the pin, and doctor reports the override
@@ -122,7 +133,7 @@ moment it will ever have. That question was pressure-tested rather than assumed 
 - **Setup hook: `.bessemer/setup.sh`, scaffolded once, contract not convention.** Idempotent,
   non-interactive; a nonzero exit aborts the dispatch and surfaces the log. The image template
   keeps a single sudoers line granting root for exactly this hook — one auditable,
-  human-committed file, and also what lets the agent legally revive a dead service mid-task. The
+  human-committed file, and also what lets the agent legally revive a dead service mid-run. The
   scaffold's header explains dropping the grant when the stack needs no root.
 
 ### User interface
@@ -153,9 +164,21 @@ never weakened for convenience:
   is an LLM-API credential — one that can spend money but cannot touch git, repo hosting, or
   infrastructure. Any credential outside that class entering the container is an egress-posture
   revisit trigger.
-- **The host never runs write-side git inside the agent's clone.** In fact it runs no git inside
-  the clone at all: the current branch is read textually from `.git/HEAD`. The host fetches FROM
-  the clone via a hardened `upload-pack` invocation, and pushes from the main repository.
+- **Bulk environment transfer is permitted only from committed files; gitignored files forward
+  declared keys only.** This is the enforcement half of the rule above, and it is a deliberate
+  divergence from the port source, which passes the developer's gitignored `.env` wholesale via
+  `--env-file` — making the secret-class rule a convention the adopter upholds by restraint
+  rather than something the code guarantees. Committed adapter env files (dummy, type-correct
+  values needed to boot the app under test) may still transfer in bulk: they are reviewable in
+  git, so a real secret placed there is a visible mistake. The gitignored `.env` forwards only
+  the names listed in `container_env_keys` plus bessemer's built-in credential names. A key
+  present in `.env` but not forwarded produces one operator-facing warning naming the key — never
+  its value, and never into the container log, PR body, or a notification, since the names alone
+  tell a prompt-injected agent what secrets exist on the host.
+- **The host never runs write-side git inside the agent's checkout.** In fact it runs no git
+  inside the checkout at all: the current branch is read textually from `.git/HEAD`. The host
+  fetches FROM the checkout via a hardened `upload-pack` invocation, and pushes from the main
+  repository.
 - **Credential checks report presence only** — never values, never fragments.
 - **`master`/`main` is refused as the working branch.** The working branch is a push target, so
   protected branches are hard-refused.
@@ -166,25 +189,25 @@ never weakened for convenience:
   review comments never do. Feedback reaches the agent only through self-authored channels — the
   issue/spec file, or an explicit `--feedback` argument.
 - **Task containers publish no ports**, drop all capabilities, and run under pids/memory limits.
-- **Specs are self-authored.** A task is a markdown file a human wrote or approved. Dispatching
+- **Specs are self-authored.** A spec is a markdown file a human wrote or approved. Dispatching
   unreviewed third-party text (a Jira ticket body, a GitHub issue comment) as agent instructions
   is the demonstrated injection vector and stays out of the pipeline.
 - **Specs reach the agent by mounted path, never inlined into the prompt.** Interpolating a spec's
   contents into a command (`$(cat …)`) is a shell-injection hazard and is never done. The same
-  rule covers ad-hoc typed prompts: they are materialized host-side into a task file and mounted
+  rule covers ad-hoc typed prompts: they are materialized host-side into a spec file and mounted
   like any other spec — which also makes them rerunnable and ledgerable.
-- **A duplicate in-flight task fails fast.** Per-branch lockfiles plus a container-name check
+- **A duplicate in-flight run fails fast.** Per-branch lockfiles plus a container-name check
   refuse a dispatch whose container is still running, rather than silently killing the running
-  task.
+  one.
 - **A crashed run leaks nothing.** Container and checkout cleanup is trap-based, so an aborted or
-  failed dispatch leaves no orphaned container or clone behind.
+  failed dispatch leaves no orphaned container or checkout behind.
 
 ### Dispatch semantics — ported as-is
 
 Carried over intact from incubation; recorded here because bessemer's implementation must match
 them and there is no earlier ADR in this repo to point at:
 
-- **A task is an issue file, and the issue file IS the dispatch spec.** Feature work is broken
+- **An issue file IS the dispatch spec.** Feature work is broken
   down into markdown issue files (tracer-bullet vertical slices, typed AFK or HITL); the
   dispatcher takes any path. There is no render step, and the self-authored-spec guarantee holds
   because the human approval step during issue-writing is the authoring.
@@ -192,16 +215,16 @@ them and there is no earlier ADR in this repo to point at:
     instructions, the demonstrated injection vector.
   - *Rejected: a Jira adapter* — agent-sized micro-issues would spam a team's board. A tracker
     adapter remains possible later as an issue-file *source*, with the human approval step intact.
-- **Sizing rubric: one vertical slice that fits one implement pass.** A task is one coherent,
+- **Sizing rubric: one vertical slice that fits one implement pass.** An issue is one coherent,
   PR-able, end-to-end slice with named acceptance tests, no overlap in files or migrations with
-  other tasks in flight, and small enough to implement within the per-pass timeout (default
+  other issues in flight, and small enough to implement within the per-pass timeout (default
   900s). Oversized work is split at issue-writing time, not at dispatch time. This rubric is what
   the rest of the pipeline assumes; violating it is the most common cause of a stalled run.
-- **One task per invocation.** Parallel waves are multiple backgrounded invocations, guarded by
+- **One run per invocation.** Parallel waves are multiple backgrounded invocations, guarded by
   the per-branch lockfiles above. *Rejected: a `spec:branch` pair syntax* — it preserved
   one-invocation waves at the cost of a more complicated CLI for a workflow that doesn't need it.
 - **Branches are user-owned and mandatory.** `--branch <name>` names THE working branch: the
-  agent's clone forks from its tip, the host pushes results back to it, and the draft PR goes
+  agent's checkout forks from its tip, the host pushes results back to it, and the draft PR goes
   from it into `--base`. The branch must already exist — creating branches is the developer's
   act. The one carve-out is the interactive picker, which may offer to create a missing branch
   behind an explicit y/N confirm; the flag path stays a hard error so scripts never create
@@ -241,7 +264,7 @@ them and there is no earlier ADR in this repo to point at:
   machine" written down as the condition. Outside teams adopting bessemer meets that condition
   exactly. Re-evaluated at adopter scope on 2026-07-24, the answer does not change: an allowlist
   proxy would break dependency installs (package registries fetch binaries from third-party
-  hosts), pre-commit hook-environment rebuilds, and documentation lookup during a task — and
+  hosts), pre-commit hook-environment rebuilds, and documentation lookup during a run — and
   proxy misses surface as AFK timeouts, the worst debugging position in the pipeline, on
   machines whose stacks the core deliberately knows nothing about. Meanwhile the channel that
   actually matters for supply-chain attacks, install-time script execution, stays open either
@@ -269,12 +292,12 @@ satisfy a small contract. Recording it here because each clause was learned the 
   type-correct values. This is what makes "no real secrets in the container" a structural
   property rather than a discipline.
 - **Dependency installation belongs in the setup hook, not baked into the image.** A bind-mounted
-  clone shadows a baked `node_modules`, and a baked layer goes stale against the clone's own
-  lockfile. This is the main reason the setup hook exists. The install runs unconditionally — a
-  nominally backend task may still touch a frontend file and trigger its pre-commit hooks — with
+  checkout shadows a baked `node_modules`, and a baked layer goes stale against the checkout's
+  own lockfile. This is the main reason the setup hook exists. The install runs unconditionally — a
+  nominally backend change may still touch a frontend file and trigger its pre-commit hooks — with
   a shared named docker volume as the package cache, so only the first run is cold.
 - **The image must build with a UID argument** so the in-container agent user matches the host
-  owner of the bind-mounted clone. **macOS Docker Desktop masks a mismatch; Linux does not** —
+  owner of the bind-mounted checkout. **macOS Docker Desktop masks a mismatch; Linux does not** —
   which means this breaks for the first Linux adopter and nobody else.
 - **The throwaway database's version may differ from production.** Fine for suites that build the
   schema from model state, but flag it if version-specific SQL enters the codebase.
@@ -290,7 +313,8 @@ satisfy a small contract. Recording it here because each clause was learned the 
   plus a per-agent image layer; API-key-only auth injected at container start; and the credential
   staying inside the permitted class — able to spend money, unable to touch git, repo hosting, or
   infrastructure. Any credential outside that class is an egress revisit trigger.
-- **Internal module boundaries** beyond the F1 skeleton.
+- **Internal module boundaries** beyond the F1 skeleton. (F1's own are settled in
+  [ADR 0002](0002-skeleton-structure.md).)
 - **The dashboard frontend** (Textual vs stdlib-http localhost web over the ops library), decided
   if and when the parallel-run-pain trigger fires.
 

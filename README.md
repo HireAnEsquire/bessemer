@@ -2,13 +2,13 @@
 
 Dispatcher for AFK ("away from keyboard") coding agents.
 
-Per task, bessemer clones your repo from origin, runs a Docker container built from the repo's own
+Per run, bessemer clones your repo from origin, runs a Docker container built from the repo's own
 image, runs an agent CLI headless — an implement pass, then a reviewer pass that loops until it
 returns a clean verdict — pushes the branch from the host, and opens or updates a **draft** pull
 request. You review and merge. Nothing merges itself.
 
-Each container gets its own throwaway database, so concurrent tasks cannot collide on migrations
-or test databases. That per-task isolation is the reason this tool exists rather than a hosted
+Each container gets its own throwaway database, so concurrent runs cannot collide on migrations
+or test databases. That per-run isolation is the reason this tool exists rather than a hosted
 alternative.
 
 ## Status: under construction
@@ -36,8 +36,13 @@ ADR, not editing code.
 - **[docs/adr/0001-founding-decisions.md](docs/adr/0001-founding-decisions.md)** — what bessemer
   is, every decision that shapes it, every alternative rejected and why, the security invariants,
   and the dispatch semantics. Read this first.
+- **[docs/adr/0002-skeleton-structure.md](docs/adr/0002-skeleton-structure.md)** — the module
+  boundaries of the skeleton: why config load is pure, why resolvers return values-or-reasons,
+  and why one module owns every subprocess.
 - **[ROADMAP.md](ROADMAP.md)** — build sequence, what's deliberately deferred, and the triggers
   that would reopen a parked decision.
+- **[CONTEXT.md](CONTEXT.md)** — the project's vocabulary, and the ambiguities it deliberately
+  resolves.
 
 ## Security posture, in brief
 

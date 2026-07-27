@@ -27,6 +27,9 @@ that dogfooding can begin at F3 rather than waiting for F6's scaffolding.
 
 *Tracer:* `uvx --from . bessemer doctor` runs green.
 
+*Broken down:* [`.bessemer/specs/f1-skeleton/`](.bessemer/specs/f1-skeleton/) — eight issues.
+Structure decided in [ADR 0002](docs/adr/0002-skeleton-structure.md).
+
 ### F2 — data layer
 
 The python helper's data core ported with its test suite (337 tests): issue parsing and
@@ -43,7 +46,7 @@ verdict break, host-side push, draft PR open/update, notification, locks and log
 invariant in ADR 0001 lands here as explicit code with explicit tests — this is the feature where
 weakening one would be easiest and worst.
 
-*Tracer:* bessemer dispatches a one-off task **on itself**. First dogfood, and it happens before
+*Tracer:* bessemer dispatches a one-off spec **on itself**. First dogfood, and it happens before
 hae switches over.
 
 ### F4 — feature mode and resume
@@ -90,7 +93,7 @@ clean; the switchover is reversible until it doesn't need to be.
 
 For adopters, in dependency order:
 
-1. **Setup script v1** — Claude-only: token walkthrough, tasks directory, defaults. Depends on
+1. **Setup script v1** — Claude-only: token walkthrough, specs directory, defaults. Depends on
    F1's config module and F6's scaffolding.
 2. **Multi-agent support (cursor/codex)** — the biggest unknown, and deliberately unscheduled.
    Hard prerequisite: ask the requesting developer what they actually want — which CLI, which
@@ -131,6 +134,7 @@ Design questions large enough to need their own session, in expected order:
 
 1. ~~resume-feedback issue breakdown~~ — done, shipped in the port source.
 2. ~~Extraction design~~ — done 2026-07-24, produced ADR 0001.
-3. **F1 issue breakdown** — current.
+3. ~~F1 issue breakdown~~ — done 2026-07-27, produced ADR 0002 and
+   `.bessemer/specs/f1-skeleton/`.
 4. Setup script and config UX — after the port lands.
 5. Multi-agent adapter — after the requesting developer's requirements are gathered.
