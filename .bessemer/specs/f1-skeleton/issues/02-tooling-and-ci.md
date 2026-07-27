@@ -70,4 +70,10 @@ yourself.
 - [ ] Deleting a type annotation somewhere in the package makes `make check` fail —
       proving mypy is actually running over everything, not a changed-file subset
 - [ ] `pre-commit run --all-files` passes; the commit hook does not run the test suite
+- [ ] **The guard still guards.** Satisfying a tool may require editing `tests/guard.py`;
+      it may not change what the guard refuses. Prove it: the suite is still green at 65,
+      and deleting the `shell=True` branch still fails the two tests that name `shell`,
+      and dropping a name from `_NETWORK_PATHS` still fails the enumeration test. A
+      security control is the last place to accept an edit that is only *probably*
+      behavior-preserving
 - [ ] Runtime dependencies remain empty; all tooling is in a dependency group
