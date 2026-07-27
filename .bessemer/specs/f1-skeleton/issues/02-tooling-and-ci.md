@@ -1,6 +1,6 @@
 # 02 — Tooling: ruff, mypy strict, pre-commit, CI
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 01
 
