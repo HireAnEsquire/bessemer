@@ -99,7 +99,9 @@ repo. Report the real output of each.
 **Order.** `01 → 01a → 02` first and in that order: 01 creates the package everything lands in,
 01a arms the guard every later suite runs under, 02 installs the checks everything after must
 pass. Review all three harder than their size suggests — they set the conventions the rest
-imitate. Then `03`, `04`, `07` are independent; `05 → 06 → 08` is a hard chain.
+imitate. Then `03` and `04` are independent of each other and can run in parallel worktrees;
+`07` needs `04`, because issue 04 owns the config schema its `config.toml` must conform to;
+`05 → 06 → 08` is a hard chain.
 
 **Launch.** From `/Users/sbowles/bessemer`, run `claude` — except issue 06, which needs
 `claude --add-dir /Users/sbowles/hae`. Then:

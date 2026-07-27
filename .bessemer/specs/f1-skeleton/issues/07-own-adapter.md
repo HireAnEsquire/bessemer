@@ -2,7 +2,7 @@
 
 Status: Todo
 Type: AFK
-Blocked by: 01
+Blocked by: 01, 04
 
 ## What to build
 
@@ -35,10 +35,15 @@ is a dispatch, not a dispatch plus an adapter.
 
 ## Acceptance criteria
 
-- [ ] `.bessemer/config.toml` exists, parses, and its keys are read by the issue 04 loader
+- [ ] `.bessemer/config.toml` exists, parses, and **every key in it is one the issue 04
+      loader actually reads**. Issue 04 owns the schema; this file conforms to it rather
+      than proposing to it. A key here that the loader ignores is a claim that bessemer is
+      configured by something it never looks at
 - [ ] The Dockerfile builds, and the resulting image has an `agent` user whose UID matches
       the `AGENT_UID` build argument
 - [ ] `setup.sh` is executable, exits 0, and is idempotent across repeated runs
 - [ ] Runtime-state paths are gitignored; `.bessemer/specs/` and `config.toml` are not
-- [ ] `bessemer doctor` finds this adapter when run from the repo root and from a nested
-      subdirectory
+- [ ] The issue 04 loader finds this adapter when called from the repo root and from a
+      nested subdirectory — the walk-up, exercised against a real adapter rather than a
+      fixture. `bessemer doctor` reporting it is issue 08's tracer, not yours: doctor's
+      check list does not exist until issue 06
