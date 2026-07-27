@@ -19,7 +19,9 @@ everything after it is written already-conforming rather than retrofitted.
   the whole package: pre-commit passes only changed filenames, and mypy given a subset of
   a package produces incomplete results — it can report success on a broken tree.
 - **`make check`** — the single entry point: `pre-commit run --all-files`, then
-  `python -m unittest discover`. Four legible lines, no cleverness.
+  `uv run python -m unittest discover`. Four legible lines, no cleverness. The `uv run`
+  form is canonical per issue 01: it guarantees the package is installed, so metadata
+  resolves and no test has an excuse to skip.
 - **GitHub Actions CI** on push and PR: install uv, then run **exactly `make check`** —
   not a re-enumeration of the individual steps.
 
