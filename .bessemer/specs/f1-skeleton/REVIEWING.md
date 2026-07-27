@@ -11,10 +11,14 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
 ## Read first
 
 1. `.bessemer/specs/f1-skeleton/issues/<NN>-*.md` — the issue, especially its acceptance criteria
-2. `git diff` (and `git status` for new files) — the whole change
-3. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
+2. `.bessemer/specs/f1-skeleton/IMPLEMENTING.md` — the rules the implementer was held to, so you
+   are not reporting as findings the things it was told to do, or missing the ones it was told
+   not to. Note in particular that files under `.bessemer/specs/` are written host-side by a
+   human: a spec edit in the history is not the implementer's work
+3. `git diff` (and `git status` for new files) — the whole change
+4. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
    change must conform to
-4. `docs/adr/0001-founding-decisions.md` — if the issue touches a security invariant
+5. `docs/adr/0001-founding-decisions.md` — if the issue touches a security invariant
 
 ## What to check, in priority order
 
@@ -22,6 +26,23 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    for the awkward criteria run the awkward version — actually stop the Docker daemon, actually
    run from outside a git work tree. A criterion that was asserted rather than executed is a
    finding even if the code is correct.
+
+   **For anything that blocks, refuses, or validates: mutate the control and confirm the named
+   test fails.** Copy the tree to your scratchpad, delete one branch or one entry, re-run. A
+   test that stays green has not been testing that branch, whatever its name says — and the
+   usual cause is that some *other* check caught the same case first, so the test passes for a
+   reason it does not mention. This is the single highest-yield technique in these instructions;
+   it has found real defects that repeated careful reading did not.
+
+   **A test derived from the thing it checks cannot notice that thing shrinking.** If the
+   assertion iterates the same list the code iterates, deleting an entry removes it from both
+   sides and the test still passes. Somewhere there has to be a literal — a hand-written
+   restatement the code does not generate — or the enumeration is unguarded no matter how
+   thorough the loop looks.
+
+   **Say what you could not falsify, and on what host.** A criterion that only fails on another
+   platform, or that a denied tool stopped you from mutating, is a first-class part of your
+   output — not a caveat to bury. Name it, say why, and say what would settle it.
 2. **Gaps.** Every acceptance criterion, satisfied or not. Say which, with evidence.
 3. **Unasked-for work.** Stubs, extra subcommands, extra config keys, modules belonging to a
    later issue. Scope creep here is not harmless: this project's premise is a tool that reports
@@ -34,7 +55,14 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    `task file`? Vocabulary drift in names and docstrings is worth reporting; it is cheap now and
    expensive after seven more issues copy it.
 6. **Security invariants**, where touched — argv-only subprocess, no environment in exception
-   context, no credential-bearing text heading anywhere agent-visible.
+   context, no credential-bearing text heading anywhere agent-visible. Two questions earn their
+   keep every time: *is there a second path to the thing being blocked* — a keyword argument, an
+   alias, an async spelling — and *does the control have a test that would fail if it started
+   refusing everything*, not only tests that it refuses the bad case.
+7. **Comments that assert.** A security note stating a reason, a docstring claiming two things
+   are kept in step — check the claim, and check that it is even falsifiable as worded. A
+   comment that is subtly wrong about *why* teaches the wrong rule to whoever widens it later,
+   and it is the part no test covers.
 
 ## What NOT to do
 

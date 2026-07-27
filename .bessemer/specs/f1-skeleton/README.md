@@ -34,4 +34,15 @@ Two consequences, both deliberate:
 
 `uvx --from . bessemer doctor` exits 0 with every check `ok` or `WARN`. This requires a
 running Docker daemon, so it is a dev-machine gate. The unit-test suite is docker-free by
-construction (issue 01), so CI still has a real gate.
+construction (issue 01a), so CI still has a real gate.
+
+## One issue was split after the fact
+
+Issue **01a** was a section of issue 01 until three review rounds found successive holes in
+it — an `executable=` bypass, a platform-dependent `posix_spawn` decision, and a network ban
+drawn at the wrong boundary. It is left as `01a` rather than renumbered so the split stays
+legible; `Blocked by:` is what actually orders the issues, and numbers are labels.
+
+The lesson generalizes past this issue: **a security control buried inside a larger issue is
+reviewed as a detail of that issue.** When one turns up mid-feature, give it its own file
+rather than growing the host issue's criteria list.

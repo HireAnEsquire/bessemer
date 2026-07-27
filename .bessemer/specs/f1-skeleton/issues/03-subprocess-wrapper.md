@@ -2,7 +2,7 @@
 
 Status: Todo
 Type: AFK
-Blocked by: 01
+Blocked by: 01, 01a
 
 ## What to build
 
@@ -34,9 +34,18 @@ determined" are different things, and conflating them turns error handling to mu
 
 A test walking the AST of every module under `bessemer/`:
 
-- **Outside `bessemer/proc.py`**: no `subprocess` import, and no use of `os.system`,
-  `os.popen`, `os.exec*`, `os.spawn*`, `os.posix_spawn`,
-  `asyncio.create_subprocess_shell`, or `pty.spawn`.
+- **Outside `bessemer/proc.py`**: no `subprocess` import, and no use of any spawn entry
+  point. **Import that set from the test guard** (issue 01a exports it as `(module, attr)`
+  pairs) rather than restating it here or in the test — a hand-copied list is how
+  `os.forkpty`, `os.posix_spawnp` and `asyncio.create_subprocess_exec` end up banned at
+  runtime and permitted statically. One set, two consumers; adding a name to the guard
+  makes this test start catching it, with no second edit to remember.
+
+  Resolving import bindings is **this test's** job, not the export's. Match on the module
+  the name is bound to, so `import subprocess as sp; sp.run(...)` is caught and
+  `bessemer.proc.run` — the wrapper's own export, which every other module calls — is not.
+  A matcher keying on the bare attribute would ban the very function this issue exists to
+  provide.
 - **Inside `bessemer/proc.py`**: an allowlist of exactly `subprocess.run` and
   `subprocess.Popen` (Popen reserved for F3's live log streaming). Everything else in the
   module is rejected — including `subprocess.getoutput`, `getstatusoutput`, `call`,
@@ -60,4 +69,7 @@ allowlist permits (interpreter and console script are allowed; docker is not).
 - [ ] Omitting `timeout` is a `TypeError` at every call site
 - [ ] AST test passes and *fails* when a `shell=True` call, a stray `subprocess` import,
       or a `subprocess.getoutput` call is deliberately introduced — prove all three
+- [ ] The banned-name list is imported from the test guard, not restated; prove it by
+      showing the AST test rejects an `os.forkpty` and an `asyncio.create_subprocess_exec`
+      call outside `bessemer/proc.py` without either name appearing in this test's source
 - [ ] `Result` has no `__bool__`

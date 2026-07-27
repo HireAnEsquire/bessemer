@@ -30,6 +30,12 @@ here is a spec bug worth fixing, not just a session to steer.
   Spec files are written host-side by a human; this mirrors the boundary the dispatcher enforces
   from F3.
 - **Do not commit.** Leave changes in the working tree and report what you changed and why.
+- **If a tool is denied to you, stop and ask — do not find another route to the same effect.**
+  Deleting a file with `os.remove` because `rm` was refused reaches the identical outcome the
+  refusal was about, and it does it somewhere nobody is looking. The denial is a decision, not
+  an obstacle; treat it the way you treat a spec conflict. Say what you were trying to do and
+  what was blocked. (ADR 0001 makes this binding on the dispatched prompts too, with the
+  reasoning — it is not an F1 house rule.)
 - **If your issue conflicts with an ADR, or a decision looks wrong once you are in the code,
   STOP and say so.** Do not resolve it silently. These decisions were grilled at length, so a
   conflict means either the spec is wrong or the reasoning is — and both are worth knowing.
@@ -42,8 +48,16 @@ didn't**. That last one matters most: from F4 these specs are read by agents wit
 ## Your issue
 
 **01 — package skeleton.** You are setting the conventions seven more sessions will copy. Do not
-add ruff, mypy, pre-commit, a Makefile, or CI — that is issue 02, landing next. `doctor` is a
-stub: it exists as a subcommand and exits 0; issue 06 fills it in. Add no other subcommand.
+add ruff, mypy, pre-commit, a Makefile, or CI — that is issue 02. Do not build the test guard —
+that is issue 01a. `doctor` is a stub: it exists as a subcommand and exits 0; issue 06 fills it
+in. Add no other subcommand.
+
+**01a — test guard.** Security-critical, and split out of 01 precisely because three review
+rounds found successive holes in it while it was a sub-bullet of something else. Enumerate
+adversarially: for every path you block, ask what the second path to the same effect is — a
+keyword argument, an alias, a subclass, an async spelling, a connectionless send. Every comment
+that states a reason must be true, and where coverage has a known limit, name the limit rather
+than writing a claim that reads as complete.
 
 **02 — tooling.** If `mypy --strict` or `ruff` reports problems in existing code, **fix the
 code** — do not loosen configuration, add ignores, or add `# type: ignore` comments to make
@@ -82,10 +96,10 @@ repo. Report the real output of each.
 
 ## For the human running these sessions
 
-**Order.** `01 → 02` first and in that order: 01 creates the package everything lands in, 02
-installs the checks everything after must pass. Review both harder than their size suggests — they
-set the conventions the other six imitate. Then `03`, `04`, `07` are independent; `05 → 06 → 08`
-is a hard chain.
+**Order.** `01 → 01a → 02` first and in that order: 01 creates the package everything lands in,
+01a arms the guard every later suite runs under, 02 installs the checks everything after must
+pass. Review all three harder than their size suggests — they set the conventions the rest
+imitate. Then `03`, `04`, `07` are independent; `05 → 06 → 08` is a hard chain.
 
 **Launch.** From `/Users/sbowles/bessemer`, run `claude` — except issue 06, which needs
 `claude --add-dir /Users/sbowles/hae`. Then:
@@ -93,5 +107,10 @@ is a hard chain.
 > Implement issue `<NN>` in this repo. Read `.bessemer/specs/f1-skeleton/IMPLEMENTING.md` and
 > follow it, including the "Your issue" entry for `<NN>`.
 
-**After each issue.** You (not the agent) update the issue's `Status:` line and commit. That split
-is the one the dispatcher enforces from F3: spec state is host-side, always.
+**After each issue**, before committing, run a fresh review session:
+
+> Review the current diff against issue `<NN>`. Read
+> `.bessemer/specs/f1-skeleton/REVIEWING.md` and follow it.
+
+Then you (not the agent) update the issue's `Status:` line and commit. That split is the one the
+dispatcher enforces from F3: spec state is host-side, always.

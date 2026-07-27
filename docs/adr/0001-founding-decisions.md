@@ -255,6 +255,15 @@ them and there is no earlier ADR in this repo to point at:
   human on the draft PR. No second-model or host-side pre-PR review layer. *Rejected: fixed-N
   blind review passes* — wasteful on clean diffs and insufficient on dirty ones, which is the
   whole reason the verdict breaks the loop.
+- **Both agent prompts instruct the agent that a denied tool is a decision, not an obstacle:
+  stop and report, never reach the same effect another way.** Observed during F1 — an agent
+  refused `rm` deleted the file with `os.remove` instead. Benign there and reported honestly,
+  but the refusal had stopped applying and only the transcript showed it. Unattended, the
+  transcript is what nobody reads. This is why the instruction is prompt-level rather than a
+  sandbox rule: the container's restrictions are what an agent cannot get around, and this is
+  the far larger class it can — every permission the host layer, the reviewer, or the human
+  expresses by declining something. The rule generalizes past tools to the whole shape:
+  blocked means say so.
 - **Interactive steps appear only when stdin is a TTY.** Backgrounded and scripted runs take
   defaults silently and log the choice — a backgrounded run must never block on a prompt.
 - **Egress is open, with the zero-cost hardenings applied** (`--no-hardlinks` clone, `--cap-drop

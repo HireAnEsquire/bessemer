@@ -44,10 +44,26 @@ CI deliberately does not run the F1 tracer — that needs a Docker daemon. CI's 
 unit suite plus static checks, which is what catches a bad mechanical edit during F2's
 337-test port.
 
+**CI is also the first Linux run of the suite**, and the test guard has platform-dependent
+behavior: CPython's `subprocess` routes through `os.posix_spawn` on glibc and not on
+macOS, so a guard that is correct on the dev box can be wrong in CI. A green CI run is the
+proof that criterion; if it is red, the guard is the first suspect, not the workflow.
+
+Issues 01 and 01a are forbidden from writing `# type: ignore` or `# noqa`, since the tools
+that would make one verifiable do not exist until now. So you are the first to run mypy over
+`tests/guard.py`, whose `Popen` subclassing is the likeliest place to need a suppression. The
+criterion below admits none. Restructure the code — and if one turns out to be genuinely
+unavoidable, that is a spec conflict to raise per `IMPLEMENTING.md`, not an exception to grant
+yourself.
+
 ## Acceptance criteria
 
 - [ ] `make check` passes from a clean checkout and is the only command a contributor
       needs to know
+- [ ] `make check` fails when the test runner vanishes without reporting. Exit code alone
+      is not enough: 01a's mutation run found that an unguarded `os.execv` replaces the
+      process image mid-suite, so the runner disappears with no summary line and status 0.
+      Gate on the run having actually finished, not merely on what it returned
 - [ ] CI invokes `make check` verbatim — no separately listed steps that could drift
 - [ ] `mypy --strict` passes with no ignores and no `# type: ignore` comments, and is
       configured `pass_filenames: false` so it always sees the whole package
