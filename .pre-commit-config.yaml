@@ -1,0 +1,56 @@
+# The commit hook, and the first half of `make check`.
+#
+# One definition of "the checks", with three consumers (ADR 0002): the developer's commit
+# hook, CI, and — from F3 — the in-container agent, whose implement prompt runs the same
+# `make check`. Tests are deliberately not here: they run in `make check`, so commits stay
+# fast while the gate an agent must pass stays complete.
+
+# Spec files are host-side state. From F3 the implement prompt declares this directory
+# read-only to the agent and review treats an agent-authored edit to it as a review-stopping
+# finding — so the fixer hooks below must never be the thing that rewrites one.
+exclude: ^\.bessemer/specs/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+
+  # ruff and mypy run out of the project environment rather than from a mirror repo pinned
+  # by `rev:` here. Their versions are already pinned once, in `uv.lock`; a second pin in
+  # this file is free to drift from it, and the drift is invisible — the hook would go green
+  # against a different version of the tool than the one `make check` and CI resolve.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy --strict
+        entry: uv run mypy --strict
+        language: system
+        # `always_run`, because `types: [python]` would decide whether mypy runs at all from
+        # the filenames pre-commit collected — and a commit that touches only `[tool.mypy]`
+        # in pyproject.toml, or only a config file that changes what gets checked, collects
+        # no Python file and so skips the check it just edited.
+        always_run: true
+        # mypy sees the whole package or it sees nothing useful: pre-commit passes only the
+        # changed filenames, and mypy given a subset of a package produces incomplete
+        # results — it can report success on a broken tree. Dropping the filenames makes it
+        # read `files` from pyproject.toml instead, which is `bessemer` and `tests`.
+        pass_filenames: false

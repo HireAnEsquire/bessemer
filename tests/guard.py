@@ -328,7 +328,7 @@ def _program_of(args: Any) -> object:
         return args
     try:
         return args[0]
-    except (TypeError, KeyError, IndexError):
+    except TypeError, KeyError, IndexError:
         return None
 
 
@@ -402,7 +402,10 @@ class _GuardedPopen(subprocess.Popen[Any]):
 
     guard_disposition: ClassVar[str] = ALLOWLISTED
 
-    def __init__(self, *args: object, **kwargs: Any) -> None:
+    # `*args: Any` rather than `*args: object`, because these are forwarded to `Popen`'s own
+    # overloads: `object` is not assignable to any of the parameters it lands in, so the
+    # stricter spelling types nothing here and only makes the forwarding unexpressible.
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         _check(_POPEN, args, kwargs)
         super().__init__(*args, **kwargs)
 
@@ -430,12 +433,12 @@ def install() -> None:
             setattr(module, name, _Refuser(f"the suite reached for {module.__name__}.{name}"))
 
     for spawner in _ALLOWLISTED_SPAWNERS:
-        if spawner is _POPEN or not hasattr(spawner.module, spawner.name):
+        if not hasattr(spawner.module, spawner.name):
             continue
-        setattr(
-            spawner.module,
-            spawner.name,
-            _Checked(getattr(spawner.module, spawner.name), spawner),
+        # `Popen` is the one that cannot be wrapped in a `_Checked`: it must stay a class.
+        replacement = (
+            _GuardedPopen
+            if spawner is _POPEN
+            else _Checked(getattr(spawner.module, spawner.name), spawner)
         )
-
-    setattr(subprocess, "Popen", _GuardedPopen)
+        setattr(spawner.module, spawner.name, replacement)

@@ -13,8 +13,10 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
 1. `.bessemer/specs/f1-skeleton/issues/<NN>-*.md` — the issue, especially its acceptance criteria
 2. `.bessemer/specs/f1-skeleton/IMPLEMENTING.md` — the rules the implementer was held to, so you
    are not reporting as findings the things it was told to do, or missing the ones it was told
-   not to. Note in particular that files under `.bessemer/specs/` are written host-side by a
-   human: a spec edit in the history is not the implementer's work
+   not to. Note in particular that files under `.bessemer/specs/` **and under `docs/adr/`** are
+   written host-side by a human: an edit to either in the diff is not the implementer's work.
+   The implementer is required to stop and raise an ADR conflict rather than resolve it, so an
+   ADR hunk sitting beside code that depends on it is the process working, not a bypass of it
 3. `git diff` (and `git status` for new files) — the whole change
 4. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
    change must conform to

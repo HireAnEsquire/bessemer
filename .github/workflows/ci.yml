@@ -1,0 +1,38 @@
+# Install uv, then run `make check` — verbatim, and nothing else. The Makefile is the one
+# definition of "the checks" (ADR 0002); a job that re-enumerated ruff, mypy and the test
+# suite here would be a second definition, free to drift from the one a developer's commit
+# hook and F3's in-container agent actually run.
+#
+# This is also the first Linux run of the suite, and the test guard has platform-dependent
+# behavior: CPython's `subprocess` routes through `os.posix_spawn` on glibc and not on macOS.
+# A green run here is the proof of that; a red one makes tests/guard.py the first suspect,
+# not this workflow.
+#
+# The F1 tracer — `bessemer doctor` green end to end — is deliberately absent: it needs a
+# running Docker daemon, so it stays a dev-machine gate. CI's job is the unit suite plus the
+# static checks, which is what catches a bad mechanical edit during F2's 337-test port.
+
+name: CI
+
+# `push` is narrowed to the default branch, because an unfiltered `push` alongside
+# `pull_request` runs every pull request twice — once for the branch, once for the merge ref.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The full tag, not `@v9`: this repository's floating major refs stop at `v7`, so `@v9`
+      # resolves to nothing and the job fails before it reaches `make check`. A GitHub
+      # release existing is a different question from a ref being named after it —
+      # `git ls-remote` is what answers the second one, and the releases API is not.
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - run: make check

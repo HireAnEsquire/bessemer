@@ -89,6 +89,20 @@ and that single requirement forces most of what follows.
   pre-commit config, and the party hurt worst by that drift is the agent — it runs its command,
   believes it is done, and finds the gap after the PR is open. The port source already works this
   way, treating `pre-commit` as the gate an agent must pass before claiming completion.
+- **No suppressions; a widened local alias is permitted only where the ill-typedness is the
+  assertion.** `# type: ignore` and `# noqa` are banned outright — they are unverifiable at the
+  point a reader meets them, and they rot silently. But a test that proves what happens on a call
+  a type checker would reject cannot be written without erasing a check somewhere. The permitted
+  shape is a one-call local alias — `spawn: Callable[..., object] = subprocess.run` — with a
+  comment saying which check is being erased and why. It is narrower than an ignore comment: the
+  binding is still checked, so a rename still fails, and only the argument list goes unread. It is
+  **not** a way to make ordinary code type-check. If the erasure is not itself the thing under
+  test, the code is wrong, not the annotation.
+- **The fixer hooks must never rewrite a spec file.** `pre-commit`'s whitespace and end-of-file
+  hooks mutate what they check, and from F3 `.bessemer/specs/` is read-only to the agent, with an
+  agent-authored edit there treated as a review-stopping finding. Tooling that quietly produced
+  one would make the boundary unenforceable — so the config excludes the directory. The checks
+  cannot be the thing that violates the rule the checks exist to protect.
 
 ## Consequences
 

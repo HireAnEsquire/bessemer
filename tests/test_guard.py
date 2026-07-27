@@ -111,8 +111,18 @@ class KnownExclusionTest(unittest.TestCase):
         self.assertIs(socket.socket.__base__, _socket.socket)
 
     def test_the_c_type_cannot_be_patched(self) -> None:
+        """Erases ruff's `B010`, and only that. Both direct spellings are refused, but by
+        different tools: `_socket.socket.connect = None` is mypy's `method-assign` and
+        `assignment`, while `setattr(_socket.socket, "connect", None)` type-checks cleanly
+        and trips `B010` instead — a rule this project's own ruff configuration turned on.
+        Binding `setattr` to a name is what puts the call out of `B010`'s reach; the
+        signature below is `setattr`'s real one, so mypy still checks the call in full.
+
+        Patching that type is what raises at runtime, and the raise is the assertion — it is
+        the known exclusion `tests/guard.py` names."""
+        patch: Callable[[object, str, object], None] = setattr
         with self.assertRaises(TypeError) as caught:
-            _socket.socket.connect = None
+            patch(_socket.socket, "connect", None)
         self.assertIn("immutable type", str(caught.exception))
 
 
@@ -161,8 +171,12 @@ class SSLSocketTest(unittest.TestCase):
         if CPython ever dropped this early check.
         """
         with self.wrapped() as tls:
+            # Erases mypy's `arg-type`, four times over: typeshed annotates every parameter
+            # of this override `Never`, which is how it spells "exists only to refuse", so
+            # no argument at all can be passed to it. Calling it anyway is the assertion.
+            sendmsg: Callable[..., object] = tls.sendmsg
             with self.assertRaises(NotImplementedError) as caught:
-                tls.sendmsg([b"x"], [], 0, ("1.2.3.4", 53))
+                sendmsg([b"x"], [], 0, ("1.2.3.4", 53))
         self.assertIn("not allowed on instances of", str(caught.exception))
 
 
@@ -356,12 +370,20 @@ class DeniedSpawnTest(unittest.TestCase):
             os.posix_spawn("/usr/local/bin/docker", ["docker", "info"], {})
 
     def test_asyncio_exec_is_denied(self) -> None:
+        """Erases mypy's `unused-coroutine` — as do the alias in the next test and the one
+        in `BypassTest.test_executable_kwarg_cannot_smuggle_a_program_past_asyncio_exec`.
+        The guard refuses at call time, before a coroutine is ever constructed, so the
+        declared `Coroutine` return is a value that never exists; a bare call reads to mypy
+        as a coroutine dropped without an `await`. Not awaiting it is the assertion."""
+        spawn: Callable[..., object] = asyncio.create_subprocess_exec
         with self.assertRaises(GuardViolation):
-            asyncio.create_subprocess_exec("docker", "info")
+            spawn("docker", "info")
 
     def test_asyncio_shell_is_denied(self) -> None:
+        # Erases mypy's `unused-coroutine`; see the test above.
+        spawn: Callable[..., object] = asyncio.create_subprocess_shell
         with self.assertRaises(GuardViolation):
-            asyncio.create_subprocess_shell("docker info")
+            spawn("docker info")
 
 
 class BypassTest(unittest.TestCase):
@@ -378,10 +400,10 @@ class BypassTest(unittest.TestCase):
     def test_executable_kwarg_cannot_smuggle_a_program_past_asyncio_exec(self) -> None:
         """`create_subprocess_exec(program, *args)` has no positional `executable` slot,
         but it forwards the keyword to `Popen`, so the keyword still names the program."""
+        # Erases mypy's `unused-coroutine`; see `DeniedSpawnTest.test_asyncio_exec_is_denied`.
+        spawn: Callable[..., object] = asyncio.create_subprocess_exec
         with self.assertRaises(GuardViolation):
-            asyncio.create_subprocess_exec(
-                "git", "--version", executable="/usr/local/bin/docker"
-            )
+            spawn("git", "--version", executable="/usr/local/bin/docker")
 
     def test_executable_given_positionally_is_still_checked(self) -> None:
         """`Popen(args, bufsize, executable, ...)` — position 2, not only a keyword."""
@@ -399,9 +421,7 @@ class BypassTest(unittest.TestCase):
         """`Path(...)` is not a `str`, and everything that is not a `str` is denied — so
         without the `os.fspath` coercion a permitted `git` given as a path object is
         refused, again with a message that reads as a guard bug."""
-        result = subprocess.run(
-            [Path(git_path()), "--version"], capture_output=True, text=True
-        )
+        result = subprocess.run([Path(git_path()), "--version"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("git version", result.stdout)
 
@@ -415,8 +435,10 @@ class BypassTest(unittest.TestCase):
         a `TypeError` out of `os.path.basename` instead of a `GuardViolation`."""
         with self.assertRaises(GuardViolation):
             subprocess.run([b"git", b"--version"])
+        # Erases mypy's `list-item`: `[1]` is not an argv, which is the case being made.
+        spawn: Callable[..., object] = subprocess.run
         with self.assertRaises(GuardViolation):
-            subprocess.run([1])
+            spawn([1])
 
     def test_a_denied_program_by_keyword_is_still_denied(self) -> None:
         with self.assertRaises(GuardViolation):
@@ -427,6 +449,8 @@ class BypassTest(unittest.TestCase):
         Without it the branch can be deleted and this still passes: `_program_of` returns
         `None` for the unreadable argv and the allowlist branch refuses that anyway — the
         same way the shell test passed on the program check before it named `shell`."""
+        # Erases mypy's `call-overload`: every `run` overload needs at least one argument,
+        # and calling it with none is exactly the shape being tested.
         spawn: Callable[..., object] = subprocess.run
         with self.assertRaises(GuardViolation) as caught:
             spawn()

@@ -64,6 +64,20 @@ yourself.
       is not enough: 01a's mutation run found that an unguarded `os.execv` replaces the
       process image mid-suite, so the runner disappears with no summary line and status 0.
       Gate on the run having actually finished, not merely on what it returned
+- [ ] **The gate does not depend on the version of `make` that happens to be installed.**
+      `.SHELLFLAGS` is the natural way to write it and is *silently ignored* by GNU Make
+      3.81, which is what `/usr/bin/make` is on macOS — so `pipefail` never applies, `tee`
+      swallows the runner's status, and `make check` exits 0 on a red suite. Prove the fix
+      on the version this repo is developed against, not only on CI's
+- [ ] **The gate is not forgeable by the suite's own output.** If it recognises a finished
+      run by matching text, a test that prints that text makes a red run look complete.
+      Anchor the match, and prove it: a deliberately failing suite that also prints the
+      sentinel must still fail `make check`
+- [ ] **Every CI action reference resolves.** `astral-sh/setup-uv@v9` does not exist — the
+      floating major tags stop at `v7` and `v9.0.0` exists only as a full semver tag, so the
+      workflow fails with "Unable to resolve action" before running anything. A release on
+      the GitHub API is not the same question as a ref named `v9`; check with
+      `git ls-remote`, and prefer the full tag or a SHA for a credential-adjacent repo
 - [ ] CI invokes `make check` verbatim — no separately listed steps that could drift
 - [ ] `mypy --strict` passes with no ignores and no `# type: ignore` comments, and is
       configured `pass_filenames: false` so it always sees the whole package

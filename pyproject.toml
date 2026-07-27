@@ -32,3 +32,39 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bessemer"]
+
+# Dev tooling lives here and never in `dependencies`. The stdlib-first posture above governs
+# the *runtime* supply chain of a credential-adjacent tool; this group never reaches an
+# adopter and never enters a container, so it is judged only on whether it earns its keep.
+# See ADR 0002, "dev tooling is adopted despite the stdlib-first posture".
+[dependency-groups]
+dev = [
+    "mypy>=1.18.2",
+    "pre-commit>=4.3.0",
+    "ruff>=0.14.0",
+]
+
+[tool.ruff]
+# 96 is what issues 01 and 01a already wrote to, in code and in prose. Chosen to match rather
+# than to impose: reflowing a security module to satisfy a number nobody had agreed on is the
+# kind of "only probably behaviour-preserving" edit criterion 7 of issue 02 exists to refuse.
+line-length = 96
+target-version = "py314"
+
+[tool.ruff.lint]
+# Deliberately more than the default E4/E7/E9/F. Each family below replaces a tool this
+# project would otherwise have to install and configure separately:
+#   E, W  pycodestyle — line length and whitespace, i.e. flake8
+#   F     pyflakes    — unused imports and names
+#   I     isort       — import ordering
+#   UP    pyupgrade   — modern syntax, which ADR 0002 relies on for `--strict` to be realistic
+#   B     bugbear     — the mutable-default and loop-variable-capture class of bug
+select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+# The whole package, always. pre-commit passes only changed filenames, and mypy given a
+# subset of a package produces incomplete results — it can report success on a broken tree.
+# The pre-commit hook sets `pass_filenames: false` so this list is what it actually checks.
+files = ["bessemer", "tests"]

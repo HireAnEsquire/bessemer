@@ -44,6 +44,22 @@ ADR, not editing code.
 - **[CONTEXT.md](CONTEXT.md)** — the project's vocabulary, and the ambiguities it deliberately
   resolves.
 
+## Development
+
+```
+make check
+```
+
+That is the only command you need: it runs ruff, mypy `--strict` and the standard hygiene hooks
+over every file, then the unit suite. CI runs exactly this, and from F3 so does the agent working
+inside a container — one definition of "the checks", so none of the three can drift.
+
+Optionally, `uv run pre-commit install` puts the static half on your commits. The tests stay out
+of the commit hook so commits stay fast; `make check` is what has to be green.
+
+The unit suite is documented in [tests/README.md](tests/README.md), including the guard that keeps
+it free of Docker, the network, and the ambient git repository.
+
 ## Security posture, in brief
 
 The full set of invariants is in ADR 0001. The short version:
