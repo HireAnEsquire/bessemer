@@ -48,6 +48,17 @@ and that single requirement forces most of what follows.
   - *Rejected: a strict env allowlist everywhere* — the stronger-sounding posture, but it breaks
     `git push` and `gh` in ways that vary per adopter machine, to defend a boundary that was
     never the one under threat.
+  - *Amended in issue 05: read-only git queries strip the variables that name a repository.*
+    Inheritance is for the push path, which needs `SSH_AUTH_SOCK` and credential helpers; a
+    local read-only query needs neither, so removing `GIT_DIR`, `GIT_WORK_TREE`,
+    `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES` and their kin costs nothing. It is not the
+    rejected allowlist above — it is subtraction, so `HOME`, `PATH`, the locale and the user's
+    own `~/.gitconfig` all still pass, and it cannot break on an adopter's machine the way an
+    allowlist does. The reason it is not optional: root agreement is the predicate that makes
+    "the host pushes from the main repository" name something unambiguous, and `GIT_DIR` alone
+    makes it compare a decoy against itself and report agreement. Measured, not argued. The
+    line is *location and discovery*, not configuration — `GIT_CONFIG_*` stays, because a
+    user's git config is something git needs and not something that moves the repository.
 - **`run()` is non-raising by default, `run_checked()` raises.** Doctor's probes are all "did this
   fail, and how"; an exception per probe turns a check list into control flow. The raising
   variant's context must never include the environment, and its stderr is credential-bearing —

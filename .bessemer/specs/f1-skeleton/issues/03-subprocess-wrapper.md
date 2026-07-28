@@ -22,6 +22,14 @@ quoting-hazard class that the port is being rewritten to escape.
   there is no returncode to report and inventing one would make "docker is not installed"
   indistinguishable from "docker exited 127". Doctor tolerates both by contract: a
   crashing check renders FAIL and the report still completes (ADR 0002).
+
+  **Re-export `TimeoutExpired` from this module.** A caller told to absorb it cannot name it:
+  the argv-boundary test forbids every module but this one from importing `subprocess` at
+  all, so the two rules together say "handle this exception, but you may not spell it". The
+  alias is inert — an exception class, already on the wrapper's allowlist for that reason —
+  and lets a caller write `except proc.TimeoutExpired`. `OSError` is a builtin and needs
+  nothing. (Added during issue 05, which hit the contradiction; recorded here because
+  `proc.py` is this issue's module.)
 - **Child output is decoded with `errors="replace"`.** `git` output is not guaranteed to
   be UTF-8 — a branch name or an author line can carry anything — and a
   `UnicodeDecodeError` out of a function documented as non-raising is exactly the

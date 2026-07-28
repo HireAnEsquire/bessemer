@@ -48,9 +48,21 @@ teaches nothing.
 
 1. `uv` / interpreter present and usable
 2. config found (the discovered `.bessemer/`, or the not-found reason)
-3. root agreement (config root vs git root)
-4. base resolution (`origin/HEAD` or the reason, with its hint)
-5. docker CLI present and daemon responding
+3. git environment clean — WARN if any of issue 05's `REDIRECTING_VARIABLES` is exported
+4. root agreement (config root vs git root)
+5. base resolution (`origin/HEAD` or the reason, with its hint)
+6. docker CLI present and daemon responding
+
+Check 3 exists because issue 05 made the resolvers immune to those variables and that
+immunity is exactly what makes the check necessary. Bessemer now answers correctly about the
+repository on disk while every git command the developer types by hand answers about
+somewhere else — and bessemer is the only thing in the room that knows. WARN rather than
+FAIL: a poisoned shell is the user's environment, not a broken adapter, and nothing bessemer
+does is wrong because of it. It sits immediately before root agreement so the explanation
+lands next to the check whose result it would otherwise make baffling. Read the names from
+`resolve.REDIRECTING_VARIABLES` rather than restating them — that list is issue 05's and is
+pinned by a literal there; a second hand-written copy here would be two lists to keep in
+step, which is a different defect from the one the literal rule prevents.
 
 Rendering follows the port source: one line per check, status column, name column,
 message, and the hint on failure.
@@ -68,8 +80,8 @@ message, and the hint on failure.
       the Docker daemon stopped — no traceback in any of the three
 - [ ] Base and root-agreement lines come from the issue 05 resolvers, not reimplemented
 - [ ] **The check list and the status values are pinned by hand-written literals.** A test
-      restates the five check names in order, and another restates `ok`/`WARN`/`FAIL`.
-      Without this, deleting a check makes doctor print four lines and exit 0 with the
+      restates the six check names in order, and another restates `ok`/`WARN`/`FAIL`.
+      Without this, deleting a check makes doctor print five lines and exit 0 with the
       whole suite green — the report shrinks and nothing notices, which is the one failure
       a tool whose job is reporting must not have. An assertion that iterates the check
       list cannot catch it; the literal is the point

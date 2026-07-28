@@ -38,6 +38,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+TimeoutExpired = subprocess.TimeoutExpired
+"""`subprocess.TimeoutExpired`, re-exported so a caller can absorb it.
+
+`run` lets this escape by contract — no process completed, so there is no returncode to
+report — which makes absorbing it the caller's job. But `tests/test_argv_boundary.py`
+forbids every other module in the package from importing `subprocess` at all, so without a
+name here the two rules together say "handle this exception, but you may not name it". The
+alias is what closes that: `except proc.TimeoutExpired` needs no import of the module this
+one exists to contain.
+
+Inert, and admitted by the wrapper's allowlist for that reason: it is an exception class and
+cannot execute anything. It is not a second entry point.
+"""
+
 _STDIN = subprocess.DEVNULL
 """Children never inherit bessemer's stdin, and this is not configurable.
 

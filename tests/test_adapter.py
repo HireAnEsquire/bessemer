@@ -17,7 +17,6 @@ shell, so both are dev-machine checks; the commands are named in the tests that 
 them.
 """
 
-import os
 import stat
 import subprocess
 import tempfile
@@ -28,6 +27,7 @@ from typing import Final
 
 from bessemer import config
 from bessemer.outcome import Resolved
+from tests.gitenv import fixture_env
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 """The repository this adapter belongs to: the directory holding `tests/`."""
@@ -85,13 +85,18 @@ def git_ignore_check(repo: Path, path: str) -> bool:
     override each other in — and a parser here would be a second implementation of them that
     could agree with the file while disagreeing with git.
 
-    The user's global and system git configuration is replaced with `/dev/null`, so a personal
-    `core.excludesFile` cannot make a path look ignored on one developer's machine.
+    `fixture_env()` rather than the ambient environment, and the whole `GIT_*` family goes
+    rather than only the two config variables this used to replace. Measured: with
+    `GIT_WORK_TREE` exported, `check-ignore` inside this temporary repository answers about the
+    tree that variable names, and `logs/` — ignored here — comes back **not ignored**, exit 1.
+    The reversed answer is the dangerous half: "not ignored" is exactly what
+    `test_the_adapter_and_the_specs_are_not_ignored` asserts for the paths that must stay
+    tracked, so that test would pass while checking nothing. See `tests/gitenv.py`.
     """
     completed = subprocess.run(
         ["git", "check-ignore", "-q", "--no-index", path],
         cwd=repo,
-        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+        env=fixture_env(),
         stdin=subprocess.DEVNULL,
         capture_output=True,
         check=False,
@@ -383,6 +388,13 @@ class GitignoreTest(unittest.TestCase):
     of the repository the tests are running in: the suite has to pass outside any git work tree
     (see `tests/README.md`), and a check against the ambient repo would fail there for a reason
     that has nothing to do with the rules being tested.
+
+    **Both git calls pass `fixture_env()`, and this is not hygiene.** Inheriting the
+    environment, `git init` under an exported `GIT_DIR` does not create the repository below —
+    it re-initialises the one `GIT_DIR` names, warns, and exits 0, so this class was silently
+    re-initialising the developer's own `.git` on every run while looking green. Under
+    `GIT_WORK_TREE` alone it exits 128 instead, which is how the silent case stayed hidden: the
+    loud variable masks it. `tests/test_gitenv.py::EscapeTest` pins both directions.
     """
 
     def setUp(self) -> None:
@@ -391,9 +403,26 @@ class GitignoreTest(unittest.TestCase):
         self.repo = Path(holder.name).resolve()
         subprocess.run(
             ["git", "init", "-q", "-b", "main", str(self.repo)],
+            env=fixture_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=True,
+        )
+        # `check=True` does not prove the repository is here. `git init` under an inherited
+        # `GIT_DIR` re-initialises the repository *that* names and exits 0, leaving this
+        # directory without a `.git` — after which `.gitignore` below is written into a plain
+        # directory and every `check-ignore` falls through to whatever `GIT_DIR` pointed at.
+        #
+        # Measured, and the reason this assertion is not redundant with `fixture_env()`: when
+        # the environment scrubbing was deleted from both calls in a *clone of this repository*,
+        # all 274 tests stayed green under `GIT_DIR`. The decoy held the same `.gitignore`, so
+        # `check-ignore` returned the answers the fixture wanted from the wrong repository —
+        # the exact trap `test_the_adapter_and_the_specs_are_not_ignored` warns about, sprung on
+        # this class. The environment fix stops the escape; this line is what notices it.
+        self.assertTrue(
+            (self.repo / ".git").is_dir(),
+            f"git init exited 0 without creating a repository at {self.repo}; "
+            f"something in the environment redirected it",
         )
         (self.repo / ".gitignore").write_bytes((REPO_ROOT / ".gitignore").read_bytes())
 

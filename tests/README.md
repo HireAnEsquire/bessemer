@@ -174,8 +174,8 @@ under test.
 
 The recurring defect shape in this feature is not a test that fails; it is a test that
 passes for a reason other than the one in its name, and goes on passing after the
-behaviour it names is deleted. Two cases are load-bearing enough to write down, because
-both are invisible on a green run.
+behaviour it names is deleted. Three cases are load-bearing enough to write down, because
+all three are invisible on a green run.
 
 **A missing binary raises `GuardViolation`, not `FileNotFoundError`.** The guard checks
 the program *before* the spawn happens, so an obviously-absent name like
@@ -188,6 +188,67 @@ The fix is to name a program the allowlist **permits**, at a path that does not 
 `tests/test_proc.py` spawns `<a temporary directory>/git`. The basename is `git`, so the
 guard waves it through; the path is not there, so the kernel is what refuses it, which is
 the thing under test. Any test about how a spawn *fails* needs this treatment.
+
+**A test that spawns `git` inside a temporary repository is answering about whatever
+repository the ambient environment names.** `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and
+`GIT_CEILING_DIRECTORIES` all redirect git, and a developer who exports one — during a
+bisect, a hook, a `git worktree` script — poisons every git call the suite makes. Measured
+before it was fixed: with `GIT_DIR` exported, 15 of 45 tests in `tests/test_resolve.py`
+failed, because every temporary directory reported itself as a work tree and read *bessemer's
+own* refs. Green in CI, green in an agent session, red only under a human's own shell — the
+same shape as the stdin case below.
+
+**A green run can be the worse outcome.** `git init -q -b main <a temporary directory>` with
+`GIT_DIR` exported does not create that repository: it **re-initialises the repository
+`GIT_DIR` names**, warns `re-init: ignored --initial-branch=main`, and **exits 0**. It does
+create the directory, so a fixture that checked only for its directory sails on, and every
+later git call inside it falls through to the repository the variable named.
+`tests/test_adapter.py::GitignoreTest` was doing exactly that: three silent re-inits of the
+developer's own `.git` per suite run, on a green result.
+
+**Therefore: "the variables are exported" is not one condition.** Verify each singly *and*
+together, because a combination can be benign where a single variable is not, and the benign
+combination is the one a summary run picks:
+
+| Environment | `git init <tmp>` |
+|---|---|
+| `GIT_WORK_TREE` alone | exit 128, `fatal: GIT_WORK_TREE … not allowed without specifying GIT_DIR` — loud |
+| `GIT_DIR` alone | exit 0, re-initialises the *other* repository, writes nothing to its config — silent |
+| both together | exit 0, re-initialises it **and records `GIT_WORK_TREE` as its `core.worktree`** — the loud failure disappears and the damage becomes durable |
+
+The bottom row is not hypothetical: it happened to this repository during issue 05, with the
+work tree recorded as a test's temporary directory. Nothing looked wrong until
+`TemporaryDirectory` cleaned that path up, after which every git command in the repo failed
+with `fatal: Invalid path` — and `git config --unset core.worktree` could not repair it from
+inside the repo, because git validates `core.worktree` before it will act. The repair is
+file-scoped from outside (`cd /tmp && git config --file <repo>/.git/config --unset
+core.worktree`) or via a `GIT_WORK_TREE=<repo>` override.
+
+That table is why the fix was verified across all nine variables one at a time as well as all
+at once. `tests/test_gitenv.py::EscapeTest` pins the two directions, and it builds its poisoned
+environment from `fixture_env()` rather than from `os.environ` — a first version wrote
+`{**os.environ, "GIT_WORK_TREE": …}`, which under an ambient `GIT_DIR` was not that variable
+alone, so the test asserting a loud failure went green while asserting nothing.
+
+Three obligations follow, all met:
+
+- **Fixture git calls pass `tests.gitenv.fixture_env()`**, which inherits the environment minus
+  **every** `GIT_*` name and then forces the config layers to `/dev/null`. The whole family
+  rather than a list: a fixture owns the repository it builds, needs nothing from the
+  developer's git environment, and the prefix rule survives git growing a tenth variable. One
+  helper, not one per test module — `tests/test_resolve.py` and `tests/test_adapter.py` both
+  use it, and two hand-built "safe git environments" are precisely how issue 07's fixtures came
+  to inherit `GIT_DIR` while issue 05's did not.
+- **The code under test strips the redirecting variables itself**, which is a security property
+  rather than test hygiene: `bessemer.resolve.REDIRECTING_VARIABLES` and the argument beside it.
+  Root agreement is what makes "the host pushes from the main repository" unambiguous, so a
+  variable that silently redirects it is a bypass. It subtracts nine names and inherits the
+  rest, deliberately weaker than the fixture rule, because it runs on an adopter's machine
+  where `HOME` and `PATH` are load bearing. `tests/test_gitenv.py::FamilyTest` asserts every
+  name it strips begins with `GIT_`, so the fixture rule is provably a superset and the two
+  cannot drift apart.
+- **Any later code that spawns git inherits both obligations** — doctor's checks, F3's
+  dispatch, and any fixture that builds a repository to test them.
 
 **A child cannot block on stdin that is not a terminal — and whether it is one is a
 property of the host, not of the code.** `make check` redirects only stderr, so fd 0 is
