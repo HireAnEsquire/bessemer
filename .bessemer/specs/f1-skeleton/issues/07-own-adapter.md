@@ -9,8 +9,11 @@ Blocked by: 01, 04
 The `.bessemer/` adapter for this repository — so bessemer is its own first adopter, and
 F3 has a real dispatch target on day one rather than waiting for F6's scaffolding.
 
-- **`.bessemer/config.toml`** (committed): the source pin and the base branch. Deliberately
-  small — every key added here is a key F1's loader must actually read.
+- **`.bessemer/config.toml`** (committed): `source` (the port-source pin) and `base`.
+  Issue 04's loader reads exactly `source`, `base`, and `specs_dir`; `specs_dir` defaults
+  to `.bessemer/specs`, which is where this repo already keeps them, so setting it would
+  be noise. Deliberately small — every key added here is a key F1's loader must actually
+  read, and 04 pins that set with a literal, so a key you invent will not silently work.
 - **`.bessemer/Dockerfile`**: trivial. Python 3.14 base, a non-root `agent` user created
   with a `AGENT_UID` build argument so the in-container user matches the host owner of the
   bind-mounted checkout, the agent CLI, and the single sudoers line granting root for

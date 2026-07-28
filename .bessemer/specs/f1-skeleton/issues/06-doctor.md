@@ -67,3 +67,9 @@ message, and the hint on failure.
 - [ ] Doctor runs and reports usefully outside a git repo, with no `.bessemer/`, and with
       the Docker daemon stopped — no traceback in any of the three
 - [ ] Base and root-agreement lines come from the issue 05 resolvers, not reimplemented
+- [ ] **The check list and the status values are pinned by hand-written literals.** A test
+      restates the five check names in order, and another restates `ok`/`WARN`/`FAIL`.
+      Without this, deleting a check makes doctor print four lines and exit 0 with the
+      whole suite green — the report shrinks and nothing notices, which is the one failure
+      a tool whose job is reporting must not have. An assertion that iterates the check
+      list cannot catch it; the literal is the point

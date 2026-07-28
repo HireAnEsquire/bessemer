@@ -25,6 +25,13 @@ here is a spec bug worth fixing, not just a session to steer.
   deliberate and consistent.
 - **Verify every acceptance criterion by running something**, not by reading the code and
   concluding it is fine. Show the actual output, including for the awkward criteria.
+- **Any list your issue owns must be pinned by a hand-written literal in a test.** Key sets,
+  check lists, status values, allowlists, default values. An assertion that reads the constant
+  it is checking cannot notice that constant changing — delete an entry and it vanishes from
+  both sides at once, and the suite stays green. Restate it by hand somewhere, so growing or
+  shrinking the list costs a deliberate edit in a second file. This is the single most common
+  defect found in F1 so far, by a wide margin: it has been shipped and caught seven times, in
+  seven different modules, by implementers who were each being careful.
 - **From issue 02 onward, `make check` must pass before you report done.**
 - **Do not edit any file under `.bessemer/specs/`** — not even to tick an acceptance checkbox.
   Spec files are written host-side by a human; this mirrors the boundary the dispatcher enforces
@@ -108,6 +115,19 @@ imitate. Then `03` and `04` are independent of each other and can run in paralle
 `04a` follows `04` and folds config's local reason type into the shared one; `07` needs `04`,
 because issue 04 owns the config schema its `config.toml` must conform to; `05 → 06 → 08` is a
 hard chain.
+
+**Before dispatching an issue, read it against three questions.** Roughly a third of everything
+F1's reviews have surfaced was a defect in the issue file or in this one, not in the code —
+and from F3 these are read by agents who cannot ask. All three below have already caught real
+defects:
+
+1. **Does it name every list it claims to own?** Issue 04 said it owned the config schema and
+   never named a key; the implementer had to derive the set from issue 07's prose.
+2. **Does `Blocked by` match what the acceptance criteria actually need?** Wrong three times —
+   07 needed 04 for the schema, and 04a needed 04 because its job is editing 04's code.
+3. **Does every type and module it references already exist by then?** ADR 0002 told issue 04
+   to use `Unresolved`, which was issue 05's deliverable, ordered after it. Issue 04 could not
+   comply with the ADR it was told to follow.
 
 **Launch.** From `/Users/sbowles/bessemer`, run `claude` — except issue 06, which needs
 `claude --add-dir /Users/sbowles/hae`. Then:
