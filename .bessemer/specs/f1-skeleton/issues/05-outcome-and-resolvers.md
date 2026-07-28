@@ -1,25 +1,14 @@
-# 05 — Outcome type and resolvers: base auto-detect, root agreement
+# 05 — Resolvers: base auto-detect, root agreement
 
 Status: Todo
 Type: AFK
-Blocked by: 03, 04
+Blocked by: 03, 04a
 
 ## What to build
 
-The values config deliberately refuses to compute, plus the shared type they come back in.
-
-### `bessemer/outcome.py`
-
-A tagged union — two frozen dataclasses, `Resolved(value)` and `Unresolved(reason, hint)`
-— consumed with `match`. Roughly thirty lines, no dependencies.
-
-Deliberately not a `Result`/`Maybe` library: the shape appears at a handful of sites, and
-railway-oriented `bind`/`map` idioms read as foreign in a codebase whose founding premise
-is a script the team can read and fix. Python 3.14's pattern matching plus mypy narrowing
-already does this natively. Revisit only if resolvers pass roughly ten.
-
-`hint` carries the fix, not just the diagnosis — it is what doctor prints after the
-failure text and what makes a check line actionable.
+The values config deliberately refuses to compute. They come back in the `Resolved` /
+`Unresolved` union from `bessemer/outcome.py`, which is **issue 04a's deliverable, not
+yours** — use it as it stands and do not extend it.
 
 ### `bessemer/resolve.py`
 
@@ -51,7 +40,6 @@ the wrong image.
 
 ## Acceptance criteria
 
-- [ ] `Resolved`/`Unresolved` narrow correctly under `mypy --strict` in a `match` block
 - [ ] `resolve_base` returns distinct reasons for: not a work tree, no origin remote,
       `origin/HEAD` unset — each with an actionable hint
 - [ ] Config-supplied base short-circuits auto-detection without invoking git

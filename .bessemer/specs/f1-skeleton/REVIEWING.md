@@ -42,6 +42,14 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    restatement the code does not generate — or the enumeration is unguarded no matter how
    thorough the loop looks.
 
+   **For anything that promises never to raise, enumerate what the library it wraps actually
+   raises.** Mutation perturbs values and branches that exist; it cannot show you an exception
+   type nobody wrote a branch for. Read the wrapped library's documented failures and check each
+   one against the `except` clauses — `tomllib.load` raises `UnicodeDecodeError` as well as
+   `TOMLDecodeError`, and that one escaped a module whose docstring said nothing here raises on
+   a user's mistake. The question is "what else can this throw", and no amount of careful
+   reading of the code under review will prompt it.
+
    **Say what you could not falsify, and on what host.** A criterion that only fails on another
    platform, or that a denied tool stopped you from mutating, is a first-class part of your
    output — not a caveat to bury. Name it, say why, and say what would settle it.

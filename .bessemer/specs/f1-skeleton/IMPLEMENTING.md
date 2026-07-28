@@ -73,6 +73,11 @@ before removing them. A security test that has never failed is decoration.
 **04 — config.** This module must not start a subprocess, directly or indirectly. Prove it with a
 test, not an assertion in a docstring.
 
+**04a — outcome type.** Small, and mostly a consolidation: `bessemer/config.py` already
+exists with its own `NotLoaded`, and your job includes deleting it in favour of the shared
+`Unresolved`. Rewrite config's tests against the new type — do not delete an assertion to
+make one pass.
+
 **05 — resolvers.** Test against real temporary git repositories, not mocks. The failure modes
 here are git's actual behavior — `origin/HEAD` unset, detached HEAD, submodules — and mocks would
 encode your assumptions about git rather than git.
@@ -100,8 +105,9 @@ repo. Report the real output of each.
 01a arms the guard every later suite runs under, 02 installs the checks everything after must
 pass. Review all three harder than their size suggests — they set the conventions the rest
 imitate. Then `03` and `04` are independent of each other and can run in parallel worktrees;
-`07` needs `04`, because issue 04 owns the config schema its `config.toml` must conform to;
-`05 → 06 → 08` is a hard chain.
+`04a` follows `04` and folds config's local reason type into the shared one; `07` needs `04`,
+because issue 04 owns the config schema its `config.toml` must conform to; `05 → 06 → 08` is a
+hard chain.
 
 **Launch.** From `/Users/sbowles/bessemer`, run `claude` — except issue 06, which needs
 `claude --add-dir /Users/sbowles/hae`. Then:
