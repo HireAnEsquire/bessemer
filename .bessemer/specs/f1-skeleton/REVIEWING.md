@@ -17,7 +17,20 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    written host-side by a human: an edit to either in the diff is not the implementer's work.
    The implementer is required to stop and raise an ADR conflict rather than resolve it, so an
    ADR hunk sitting beside code that depends on it is the process working, not a bypass of it
-3. `git diff` (and `git status` for new files) — the whole change
+3. **The whole change, which is not what `git diff` shows you.** Nothing is committed when you
+   review, and an issue's most important files are usually the *new* ones — `git diff` omits
+   every untracked file silently, so it renders a green, complete-looking diff of the leftovers.
+   Issue 07 is the case to remember: `git diff` showed `.gitignore`, an ADR and the issue file,
+   while the Dockerfile carrying the container's entire privilege boundary and the test file
+   pinning it were both untracked and therefore invisible. A review of that diff reports clean
+   and has read nothing that mattered. So:
+
+       git status --short                        # everything, tracked and not
+       git diff HEAD --                          # the tracked half
+       git status --porcelain | grep '^??'       # the files the line above cannot show you
+
+   Read every untracked file in full. If the issue's headline deliverable is not in your diff,
+   that is the symptom, not an absence of work
 4. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
    change must conform to
 5. `docs/adr/0001-founding-decisions.md` — if the issue touches a security invariant
@@ -35,6 +48,14 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    usual cause is that some *other* check caught the same case first, so the test passes for a
    reason it does not mention. This is the single highest-yield technique in these instructions;
    it has found real defects that repeated careful reading did not.
+
+   **Run a benign control mutation too, and report it.** A red result proves a test fired; it
+   does not prove the test fired *for the reason it names*. Make a harmless edit of the same
+   shape in the same place — reorder two independent flags, reflow a comment, rename a local —
+   and confirm the suite stays green. Without that, a test hard-wired to reject any change at
+   all reads identically to one guarding a property, and every red row in your report means
+   less than it appears to. Report the control alongside the battery even when it finds
+   nothing; that it found nothing is the result.
 
    **A test derived from the thing it checks cannot notice that thing shrinking.** If the
    assertion iterates the same list the code iterates, deleting an entry removes it from both

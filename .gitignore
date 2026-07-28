@@ -221,3 +221,22 @@ __marimo__/
 #   The test runner's captured output. `*.log` above already covers the file; the
 #   directory is named here so the reason it exists is written down.
 .make/
+
+# The adapter's runtime state
+#   `.bessemer/` holds two different kinds of file. The adapter itself — config.toml, the
+#   Dockerfile, setup.sh, and the specs directory — is committed: it is what teaches bessemer
+#   about this repo, and `.bessemer/specs/` is additionally this project's development record
+#   (see .bessemer/specs/f1-skeleton/README.md, where tracking them is a deliberate divergence
+#   from the port source). Everything below is state a run produces on one machine, so
+#   committing any of it would be committing one developer's afternoon.
+#
+#   Every path is anchored with a leading `/`, so these rules cannot reach a `logs/` or
+#   `locks/` directory somewhere else in the tree. `.env` and `*.log` are already ignored
+#   globally above; these entries are still written out, because reading them off a generic
+#   Python template is not the same as saying which files this adapter is expected to produce.
+/.bessemer/config.local.toml
+/.bessemer/.env
+/.bessemer/checkouts/
+/.bessemer/logs/
+/.bessemer/locks/
+/.bessemer/runs.jsonl

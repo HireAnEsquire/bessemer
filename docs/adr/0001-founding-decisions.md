@@ -94,8 +94,20 @@ moment it will ever have. That question was pressure-tested rather than assumed 
 ### Distribution and configuration
 
 - **Distribution: uvx pinned from git; the core never enters the consuming repo.** The committed
-  `.bessemer/config.toml` pins a source ref (tag or commit SHA); a two-line repo shim runs
-  `uvx --from git+<source>@<pinned-ref> bessemer ...`. uv resolves, caches, and supplies the
+  `.bessemer/config.toml` pins the core in a single key; a two-line repo shim runs
+  `uvx --from <source> bessemer ...`.
+
+  **`source` is the complete `--from` specifier, not a bare URL with the ref supplied
+  separately** — `git+https://github.com/…/bessemer@<tag-or-sha>`, prefix and pin included.
+  Written the other way, as `git+<source>@<ref>`, the pin needs a second config key that must
+  agree with the first, and two values that must agree are two values that can disagree: bump
+  the ref, leave the URL pointing at a fork, and the team is pinned to something nobody chose.
+  That is the version skew this whole decision exists to prevent, reintroduced one level down.
+  One string means upgrading is one edit, and there is nothing for it to be out of step with.
+  (Corrected during F1: the ADR originally composed the two, and issue 04's key set —
+  `source`, `base`, `specs_dir` — never had the second key to compose from.)
+
+  uv resolves, caches, and supplies the
   interpreter; no PyPI publishing required. Every teammate runs the exact team-pinned version —
   the pin lives in a committed file, so the within-team version skew that killed plain
   tool-on-PATH cannot occur — and upgrading is a one-line reviewable ref bump. `.bessemer/` in a
@@ -135,6 +147,21 @@ moment it will ever have. That question was pressure-tested rather than assumed 
   keeps a single sudoers line granting root for exactly this hook — one auditable,
   human-committed file, and also what lets the agent legally revive a dead service mid-run. The
   scaffold's header explains dropping the grant when the stack needs no root.
+
+  **The granted path is outside the checkout, and the invocation must match it verbatim.** The
+  grant is `agent ALL=(ALL) NOPASSWD: /usr/bin/bash /bessemer/setup.sh`; dispatch bind-mounts
+  `.bessemer/setup.sh` read-only at that absolute path. A sudoers entry pointing into the
+  bind-mounted checkout would name a script the agent can rewrite and then execute as root,
+  which is general root wearing one line's clothing. sudo matches the argument list exactly, so
+  dispatch invokes exactly that string — an extra flag is denied, not ignored. Measured on the
+  built image: a different script is refused, and `BASH_ENV` is stripped by `env_reset` rather
+  than sourced as root.
+
+  **The agent user must not be UID 0.** The image takes the host dispatcher's UID as a build
+  argument so the bind mount is writable, and `useradd -o` permits a duplicate — including 0,
+  which silently produces an image whose "non-root agent" is root and dissolves the container
+  boundary this whole section rests on. Dispatching from a root shell is ordinary in CI, so the
+  image fails the build on `AGENT_UID=0` rather than trusting the caller.
 
 ### User interface
 

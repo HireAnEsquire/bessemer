@@ -1,0 +1,32 @@
+# Bessemer's adapter for bessemer — the committed layer, so this repo is its own first
+# adopter and F3 has a real dispatch target on day one.
+#
+# Only keys `bessemer/config.py` actually reads belong here. It reads three — `source`, `base`
+# and `specs_dir` — and a key it does not read is neither honoured nor rejected, so inventing
+# one would be a claim that bessemer is configured by something it never looks at. Adding a key
+# starts in `KNOWN_KEYS`, not here.
+#
+# Dev-owned values go in `config.local.toml` beside this file, which is gitignored and wins per
+# key. Secrets go in `.bessemer/.env`, also gitignored, and never here.
+
+# The complete `uvx --from` specifier for bessemer's own core (ADR 0001, distribution) — the
+# `git+` prefix, the URL, and the pin, in one string. One key rather than a URL here and a ref
+# somewhere else: two values that must agree are two values that can disagree, and upgrading is
+# one edit with nothing to be out of step with. Every teammate then runs the exact same version.
+#
+# A commit SHA rather than a tag or a branch: this repo has no tags yet, and `@main` would make
+# the pin move under the team without anyone editing a file — which is the version skew the pin
+# exists to prevent. Nothing resolves this until F3 builds the dispatch that reads it, so it is
+# a real pin to a real commit rather than a placeholder, and it is stale by design until
+# someone bumps it deliberately.
+source = "git+https://github.com/HireAnEsquire/bessemer@07dcb9bd6989032b20e6521ca0d0e0026a44cf16"
+
+# The ref a run's pull request targets and diffs against — never pushed to, never forked from.
+# Set explicitly even though issue 05's resolver can read it from `origin/HEAD`, because a
+# committed value is the team's answer and the auto-detect is a fallback for adapters that
+# have not stated one.
+base = "main"
+
+# `specs_dir` is deliberately absent. It defaults to `.bessemer/specs`, which is already where
+# this repo keeps them, so setting it would restate the default and add a line that has to stay
+# in step with one.
