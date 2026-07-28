@@ -80,7 +80,10 @@ before removing them. A security test that has never failed is decoration.
 **04 — config.** This module must not start a subprocess, directly or indirectly. Prove it with a
 test, not an assertion in a docstring.
 
-**04a — outcome type.** Small, and mostly a consolidation: `bessemer/config.py` already
+**04a — outcome type.** A consolidation, which is exactly why the contract needs re-checking
+rather than carried over: if the module you are rewriting promises never to raise, re-enumerate
+what the libraries it calls actually raise, against the new code. A mechanical swap is where
+that question does not get asked. Small, and mostly a consolidation: `bessemer/config.py` already
 exists with its own `NotLoaded`, and your job includes deleting it in favour of the shared
 `Unresolved`. Rewrite config's tests against the new type — do not delete an assertion to
 make one pass.

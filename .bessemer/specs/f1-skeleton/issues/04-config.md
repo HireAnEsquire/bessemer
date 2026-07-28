@@ -1,6 +1,6 @@
 # 04 — Config: discovery, two-layer load, precedence
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 01
 
@@ -28,10 +28,28 @@ entire reason to exist.
 - **Precedence**: CLI flags > `BESSEMER_*` env vars > local > committed > defaults.
   Auto-detected values (issue 05) sit below defaults and are not this module's business.
 - **A file `tomllib` cannot read is a structured reason — for any reason, not only a syntax
-  error.** TOML mandates UTF-8, so a file saved in another encoding is malformed TOML, but
-  `tomllib.load` reports it as `UnicodeDecodeError` rather than `TOMLDecodeError`. "Malformed
-  TOML" is too narrow a phrase to scope an `except` clause by; the promise is that nothing
-  in this module raises on a user's mistake, and that is what has to hold.
+  error.** The promise is that nothing in this module raises on a user's mistake, and that
+  is what has to hold. Enumerating what the parser throws does not achieve it: three
+  separate rounds each found one more type escaping the `except` clauses —
+  `TOMLDecodeError`, then `UnicodeDecodeError` (TOML mandates UTF-8, and `tomllib` decodes
+  before it parses), then `RecursionError` from ~500 nested brackets in a 1 KB file.
+
+  So the parse boundary is **total**: wrap `path.open` and `tomllib.load` in
+  `except Exception` and name the exception type in the reason. Keep the specific clauses
+  above it for the cases with a genuinely distinct hint — the fix for "not UTF-8" is not
+  the fix for "syntax error" — and let the total clause catch the rest. This is deliberately
+  narrower than a blanket `except Exception` around the module: it is scoped to a call into
+  a library whose failure modes we do not own and cannot enumerate.
+
+  **Arrange the block so that nothing of bessemer's runs inside it, and pin that with a
+  test.** This is an obligation, not a description — a total clause containing any of our
+  own code reports *our* bug as the user's broken file, sending them to inspect something
+  that is fine. Constructing the return value counts: bind the parsed layer inside the
+  block and construct outside it. The pin is a test that makes the constructor raise and
+  asserts the exception *propagates* rather than coming back as a reason; it fails while the
+  constructor sits inside the block, which is what makes it a pin rather than a restatement.
+  Without it the property decays silently — key normalisation, coercion, and F3's
+  `container_env_keys` check all read as natural additions right after the parse.
 - **An unrecognised key is reported, never rejected.** An older pinned core reading a newer
   config file is routine — `container_env_keys` arrives in F3 and must not hard-fail a
   loader that predates it. Issue 07 depends on this answer, so it is stated here rather

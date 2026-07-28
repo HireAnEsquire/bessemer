@@ -16,9 +16,23 @@ becomes configuration. Because the environment layer below is built only from `K
 that is structural — `BESSEMER_ROOT` cannot be read even by accident.
 
 **Nothing here raises on a user's mistake.** A missing adapter and a malformed TOML file
-both come back as `NotLoaded`, a reason and a hint. Doctor renders it as a check line and
-keeps going; dispatch hard-errors on the identical value. A `tomllib` traceback would be
-the same information delivered as a crash.
+both come back as `Unresolved`, a reason and a hint — the shared value-or-reason type from
+`bessemer.outcome`, the same one issue 05's resolvers return. Doctor renders it as a check
+line and keeps going; dispatch hard-errors on the identical value. A `tomllib` traceback
+would be the same information delivered as a crash.
+
+That promise is kept by a **total** parse boundary rather than by an enumeration of what
+`tomllib` throws — see `_read_layer`, where the specific clauses exist only for the cases
+whose *fix* differs and a final `except Exception` absorbs the rest. An enumeration was
+tried three times and escaped three times.
+
+The five failure cases here — no adapter found, unparseable TOML, a file that is not UTF-8,
+a file that could not be read, and whatever the total clause absorbed — are told apart by
+their `reason` and `hint` text and by nothing else. There is no tag and no subtype, so a
+caller wanting to branch on *which* failure it got has to match on prose. That is the
+deliberate bar at F1: no caller branches on the case yet, doctor and dispatch both render or
+refuse on the pair as a whole, and a tag invented before anything reads it would be a schema
+nothing pins.
 
 Whether the config root and the git root agree is *not* checked here — it needs git, so it
 is a resolver (issue 05). This module's answer to "where is the adapter" is deliberately
@@ -31,6 +45,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+
+from bessemer.outcome import Resolved, Unresolved
 
 ADAPTER_DIR: Final = ".bessemer"
 """The directory whose presence marks a repository as having an adapter."""
@@ -160,20 +176,6 @@ class Config:
         return tuple(sorted((set(self.committed) | set(self.local)) - KNOWN_KEYS))
 
 
-@dataclass(frozen=True)
-class NotLoaded:
-    """Why there is no config, in a form a caller can render or refuse on.
-
-    Same two fields as issue 05's `Unresolved`, deliberately: `reason` diagnoses and `hint`
-    carries the fix, which is what makes a doctor line actionable rather than merely true.
-    Kept as its own type because a failure to *load* and a failure to *resolve* are
-    different things, and because issue 05 owns `outcome.py`.
-    """
-
-    reason: str
-    hint: str
-
-
 def find_adapter_dir(start: Path) -> Path | None:
     """The nearest `.bessemer/` at or above `start`, or `None` at the filesystem root.
 
@@ -193,17 +195,46 @@ def find_adapter_dir(start: Path) -> Path | None:
     return None
 
 
-def _read_layer(path: Path) -> Mapping[str, object] | NotLoaded:
+def _read_layer(path: Path) -> Resolved[Mapping[str, object]] | Unresolved:
     """Parse one TOML layer. A file that is not there is an empty layer, not a failure.
 
-    Three failure shapes, three hints, because they have three different fixes. Scoping the
-    `except` clauses by the phrase "malformed TOML" would be too narrow — see the decoding
-    clause below, which is malformed TOML arriving as neither a `TOMLDecodeError` nor an
-    `OSError`.
+    **The parse boundary is total.** The specific clauses below exist only where the fix
+    genuinely differs — "re-save as UTF-8" is not "fix the syntax error" — and everything
+    else is absorbed by a final `except Exception` that names the exception type in its
+    reason. That is not defensiveness, it is the only shape that makes this module's promise
+    true: three separate rounds of review each found one more type escaping an enumerated
+    list — `TOMLDecodeError`, then `UnicodeDecodeError`, then `RecursionError` from ~600
+    nested brackets in a 1 KB file — which is evidence the enumeration does not converge.
+    `MemoryError` is the next candidate and nobody has looked for the one after it.
+
+    Deliberately narrower than a blanket `except Exception` around the module: it is scoped
+    to two calls into a library whose failure modes bessemer does not own and cannot
+    enumerate.
+
+    **Nothing of bessemer's may run inside the block.** That is an obligation on whoever
+    edits this function next, not a description of how it happens to read today. The block
+    holds `path.open` and `tomllib.load` and nothing else: the parsed layer is *bound*
+    inside and the `Resolved` is *constructed* outside, because a total clause wrapped
+    around our own code reports our bug as the user's broken file — a defect in
+    `bessemer.outcome` came back as "config.toml could not be parsed", sending the reader to
+    inspect a file that was fine. That is worse than the traceback it replaced, and it is
+    the exact inversion the totality argument was supposed to buy safety from.
+
+    `tests/test_config.py` pins it: one test makes the constructor raise and asserts the
+    exception *propagates*. It fails the moment anything of ours moves back inside. Key
+    normalisation, value coercion and F3's `container_env_keys` check all read as natural
+    additions right after the parse, which is why the property needs a test rather than a
+    paragraph.
     """
     try:
         with path.open("rb") as handle:
-            return tomllib.load(handle)
+            # Annotated for the reader, not for the type checker: it states the layer type
+            # where the layer is built, rather than leaving it to be derived from the
+            # return annotation. Nothing depends on it — `tomllib.load` is typed as
+            # returning `dict[str, Any]`, but mypy solves `T` from this function's declared
+            # return type, so the unannotated spelling is `Resolved[Mapping[str, object]]`
+            # too and leaks no `Any`.
+            parsed: Mapping[str, object] = tomllib.load(handle)
     except FileNotFoundError:
         # Both layers are optional, independently: a repo with only a committed file is the
         # common case, and a dev with only a local one is a legitimate second.
@@ -213,7 +244,7 @@ def _read_layer(path: Path) -> Mapping[str, object] | NotLoaded:
         # intended reading — a symlink to nothing and no file at all both mean "no config
         # here" — but it is a decision, not an accident, and it does mean a broken link in
         # an adapter is silently ignored.
-        return {}
+        return Resolved({})
     except UnicodeDecodeError as error:
         # TOML mandates UTF-8, so this *is* malformed TOML — but `tomllib.load` decodes
         # before it parses, so it surfaces as a `UnicodeDecodeError` and never reaches the
@@ -223,12 +254,12 @@ def _read_layer(path: Path) -> Mapping[str, object] | NotLoaded:
         #
         # Its own hint, because its own fix: re-saving the file in a different encoding, not
         # correcting a line.
-        return NotLoaded(
+        return Unresolved(
             reason=f"{path} is not valid TOML: it is not UTF-8 text: {error}",
             hint=f"re-save {path.name} as UTF-8; TOML files must be UTF-8",
         )
     except tomllib.TOMLDecodeError as error:
-        return NotLoaded(
+        return Unresolved(
             reason=f"{path} is not valid TOML: {error}",
             hint=f"fix the syntax error at the line named above in {path.name}",
         )
@@ -236,10 +267,37 @@ def _read_layer(path: Path) -> Mapping[str, object] | NotLoaded:
         # A directory named config.toml, a permission denial, a symlink loop — the cases
         # where the bytes could not be obtained at all. Distinct from both parse failures
         # above because the fix is distinct.
-        return NotLoaded(
+        return Unresolved(
             reason=f"{path} could not be read: {error}",
             hint=f"check that {path.name} is a readable file",
         )
+    except Exception as error:
+        # The total clause. `RecursionError` from deeply nested arrays is the case that
+        # forced it — a `RuntimeError`, so it escapes every clause above — but the point is
+        # not to have finally caught that one. It is that this module can now promise
+        # "nothing here raises on a user's mistake" without that promise depending on
+        # bessemer having correctly enumerated `tomllib`'s failure modes.
+        #
+        # The exception type is named in the reason because it is the only thing that
+        # distinguishes one absorbed failure from another: this clause has no idea what it
+        # caught, and a reason that did not say would leave a user with less than the
+        # traceback it replaced.
+        #
+        # `BaseException` is deliberately *not* caught. `KeyboardInterrupt` and `SystemExit`
+        # are not a user's mistake in a config file, and swallowing them here would make
+        # Ctrl-C during a load report a malformed adapter.
+        return Unresolved(
+            reason=f"{path} could not be parsed: {type(error).__name__}: {error}",
+            hint=(
+                f"inspect {path.name} for something a TOML parser cannot handle, such as "
+                f"deeply nested tables or arrays, and report this if the file looks ordinary"
+            ),
+        )
+
+    # Outside the block, deliberately: see the docstring. `parsed` is bound only on the path
+    # that fell through every handler, and mypy accepts the read because each handler above
+    # returns, so there is no route here that skipped the assignment.
+    return Resolved(parsed)
 
 
 def _env_layer(env: Mapping[str, str]) -> Mapping[str, object]:
@@ -282,19 +340,23 @@ def load(
     start: Path | None = None,
     env: Mapping[str, str] | None = None,
     flags: Mapping[str, object] | None = None,
-) -> Config | NotLoaded:
+) -> Resolved[Config] | Unresolved:
     """Find the adapter and read its layers. Never raises on a user's mistake.
 
     `start` defaults to the current working directory, `env` to this process's environment.
     Both are parameters so tests can drive the walk-up and the environment layer without
     touching either — a test that has to `chdir` is a test that cannot run beside another.
+
+    The `Config` arrives wrapped rather than bare so that the success case cannot be told
+    from the failure case by a truthiness test or an attribute probe: callers `match`, and
+    the type checker narrows.
     """
     start = Path.cwd() if start is None else start
     env = os.environ if env is None else env
 
     adapter_dir = find_adapter_dir(start)
     if adapter_dir is None:
-        return NotLoaded(
+        return Unresolved(
             reason=f"no {ADAPTER_DIR}/ directory found in {start} or any parent directory",
             hint=(
                 f"run bessemer from inside a repository that has a {ADAPTER_DIR}/ directory, "
@@ -304,15 +366,21 @@ def load(
 
     layers: dict[str, Mapping[str, object]] = {}
     for name, filename in ((COMMITTED, COMMITTED_FILE), (LOCAL, LOCAL_FILE)):
-        layer = _read_layer(adapter_dir / filename)
-        if isinstance(layer, NotLoaded):
-            return layer
-        layers[name] = layer
+        # The first unreadable layer ends the load. Reading the second and reporting both
+        # would mean returning two reasons in a type that carries one, and the fix for the
+        # first is a prerequisite for trusting anything said about the second.
+        match _read_layer(adapter_dir / filename):
+            case Resolved(value=values):
+                layers[name] = values
+            case Unresolved() as unresolved:
+                return unresolved
 
-    return Config(
-        adapter_dir=adapter_dir,
-        committed=layers[COMMITTED],
-        local=layers[LOCAL],
-        env=_env_layer(env),
-        flags=_flag_layer({} if flags is None else flags),
+    return Resolved(
+        Config(
+            adapter_dir=adapter_dir,
+            committed=layers[COMMITTED],
+            local=layers[LOCAL],
+            env=_env_layer(env),
+            flags=_flag_layer({} if flags is None else flags),
+        )
     )

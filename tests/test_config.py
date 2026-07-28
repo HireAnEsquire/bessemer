@@ -10,13 +10,79 @@ test that cannot run beside another one, and a test that inherits `os.environ` p
 fails on what the developer happens to have exported.
 """
 
+import ast
 import tempfile
+import tomllib
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
+from typing import assert_never, assert_type
+from unittest import mock
 
 from bessemer import config
-from bessemer.config import Config, NotLoaded
+from bessemer.config import Config
+from bessemer.outcome import Resolved, Unresolved
+
+
+def config_source() -> str:
+    """The text of `bessemer/config.py`, for the assertions that read the module itself.
+
+    Read from `config.__file__` rather than from a hard-coded path, so a moved module fails
+    loudly here instead of leaving these assertions passing against a file that no longer
+    exists. `tests/test_config_purity.py` walks the same source the same way.
+    """
+    origin = config.__file__
+    assert origin is not None, "bessemer.config must be importable from a source tree"
+    return Path(origin).read_text(encoding="utf-8")
+
+
+def read_layer_handlers() -> list[str]:
+    """The exception types `_read_layer` catches, as written, in source order.
+
+    Read out of the module's own AST rather than restated from the fixtures, because that
+    is the only thing that can notice the module growing a case the tests do not know
+    about. A literal compared to a hand-written fixture list agrees with itself.
+
+    Exactly one `try` is asserted on the way past: a second one — inside a handler, or
+    around a later step — would be a second parse boundary with none of the argument that
+    justifies the first, and it would put the handler list below out of order.
+    """
+    functions = [
+        node
+        for node in ast.walk(ast.parse(config_source()))
+        if isinstance(node, ast.FunctionDef) and node.name == "_read_layer"
+    ]
+    assert len(functions) == 1, f"expected one _read_layer, found {len(functions)}"
+    blocks = [node for node in ast.walk(functions[0]) if isinstance(node, ast.Try)]
+    assert len(blocks) == 1, f"expected one try block in _read_layer, found {len(blocks)}"
+    return [
+        "<bare except>" if handler.type is None else ast.unparse(handler.type)
+        for handler in blocks[0].handlers
+    ]
+
+
+def unresolved_sites() -> int:
+    """How many times `bessemer/config.py` constructs an `Unresolved`.
+
+    One per failure case, which is what ties the hand-written case names below to the
+    module rather than to the fixtures that provoke them.
+    """
+    return sum(
+        1
+        for node in ast.walk(ast.parse(config_source()))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if node.func.id == "Unresolved"
+    )
+
+
+def nested_arrays(depth: int) -> str:
+    """A TOML document whose single value is `depth` arrays inside one another.
+
+    Tiny on disk and ruinous to a recursive-descent parser: at 5,000 the document below is
+    ten kilobytes. That asymmetry is the reason the total clause exists — an adapter file
+    nobody would look at twice can take `tomllib` past the recursion limit.
+    """
+    return f"v = {'[' * depth}{']' * depth}\n"
 
 
 class TreeTest(unittest.TestCase):
@@ -44,14 +110,18 @@ class TreeTest(unittest.TestCase):
         env: Mapping[str, str] | None = None,
         flags: Mapping[str, object] | None = None,
     ) -> Config:
-        """Load from `start`, failing the test rather than the type checker on `NotLoaded`.
+        """Load from `start`, failing the test rather than the type checker on `Unresolved`.
 
         `env` defaults to empty rather than to `load`'s own default of `os.environ`, so a
         test cannot accidentally depend on the developer's exported variables.
+
+        Unwraps the `Resolved`, so the tests below read as assertions about a `Config`
+        rather than about the union. `NarrowingTest` is where the union itself is under
+        test; here it would be noise repeated forty times.
         """
         loaded = config.load(start=start, env={} if env is None else env, flags=flags)
-        assert not isinstance(loaded, NotLoaded), loaded
-        return loaded
+        assert isinstance(loaded, Resolved), loaded
+        return loaded.value
 
 
 class DiscoveryTest(TreeTest):
@@ -114,8 +184,8 @@ class NotFoundTest(TreeTest):
         """The criterion is "no exception, no traceback". `load` returning at all is the
         assertion; the isinstance check is what stops it passing on a `Config`."""
         loaded = config.load(start=self.tmp, env={})
-        self.assertIsInstance(loaded, NotLoaded)
-        assert isinstance(loaded, NotLoaded)
+        self.assertIsInstance(loaded, Unresolved)
+        assert isinstance(loaded, Unresolved)
         self.assertIn(config.ADAPTER_DIR, loaded.reason)
         self.assertIn(str(self.tmp), loaded.reason)
         self.assertTrue(loaded.hint)
@@ -124,7 +194,7 @@ class NotFoundTest(TreeTest):
         """`bessemer init` lands in F6. A hint telling a stuck user to run a subcommand
         this build does not have would be worse than no hint at all."""
         loaded = config.load(start=self.tmp, env={})
-        assert isinstance(loaded, NotLoaded)
+        assert isinstance(loaded, Unresolved)
         self.assertNotIn("init", loaded.hint)
 
 
@@ -287,8 +357,8 @@ class MalformedTest(TreeTest):
     def test_malformed_committed_toml_is_a_reason_naming_the_file(self) -> None:
         self.make_adapter(self.tmp, {config.COMMITTED_FILE: "base = \n"})
         loaded = config.load(start=self.tmp, env={})
-        self.assertIsInstance(loaded, NotLoaded)
-        assert isinstance(loaded, NotLoaded)
+        self.assertIsInstance(loaded, Unresolved)
+        assert isinstance(loaded, Unresolved)
         self.assertIn(config.COMMITTED_FILE, loaded.reason)
         self.assertIn("not valid TOML", loaded.reason)
         self.assertTrue(loaded.hint)
@@ -304,7 +374,7 @@ class MalformedTest(TreeTest):
             },
         )
         loaded = config.load(start=self.tmp, env={})
-        assert isinstance(loaded, NotLoaded)
+        assert isinstance(loaded, Unresolved)
         self.assertIn(config.LOCAL_FILE, loaded.reason)
         self.assertNotIn(f"/{config.COMMITTED_FILE}", loaded.reason)
 
@@ -318,8 +388,8 @@ class MalformedTest(TreeTest):
         adapter = self.make_adapter(self.tmp)
         (adapter / config.COMMITTED_FILE).write_bytes(b'base = "m\xffain"\n')
         loaded = config.load(start=self.tmp, env={})
-        self.assertIsInstance(loaded, NotLoaded)
-        assert isinstance(loaded, NotLoaded)
+        self.assertIsInstance(loaded, Unresolved)
+        assert isinstance(loaded, Unresolved)
         self.assertIn(config.COMMITTED_FILE, loaded.reason)
         self.assertIn("not UTF-8", loaded.reason)
         self.assertIn("UTF-8", loaded.hint)
@@ -335,9 +405,81 @@ class MalformedTest(TreeTest):
         hints = []
         for adapter in (syntax, encoding):
             loaded = config.load(start=adapter.parent, env={})
-            assert isinstance(loaded, NotLoaded)
+            assert isinstance(loaded, Unresolved)
             hints.append(loaded.hint)
         self.assertNotEqual(hints[0], hints[1])
+
+    def test_deeply_nested_arrays_are_a_reason_rather_than_a_recursion_error(self) -> None:
+        """The case that forced the parse boundary to be total.
+
+        `tomllib` recurses per bracket, so a 10 KB file exhausts the stack and raises
+        `RecursionError` — a `RuntimeError`, which is neither `TOMLDecodeError` nor
+        `UnicodeDecodeError` nor `OSError`. It escaped all three and reached the caller as a
+        traceback, from a file a user could plausibly write.
+
+        The exception type is asserted in the reason, not merely that *something* was
+        returned: that is what distinguishes "the total clause caught it and said what it
+        was" from "the total clause caught it and said nothing useful".
+        """
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: nested_arrays(NESTING_DEPTH)})
+        loaded = config.load(start=self.tmp, env={})
+        self.assertIsInstance(loaded, Unresolved)
+        assert isinstance(loaded, Unresolved)
+        self.assertIn(config.COMMITTED_FILE, loaded.reason)
+        self.assertIn("RecursionError", loaded.reason)
+        self.assertTrue(loaded.hint)
+
+    def test_the_nesting_fixture_is_what_makes_that_test_mean_anything(self) -> None:
+        """The control. `nested_arrays` at a shallow depth must parse *cleanly* — otherwise
+        the test above would pass on a fixture that was malformed for some ordinary reason
+        and never exercised the total clause at all."""
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: nested_arrays(3)})
+        loaded = self.load(self.tmp)
+        self.assertEqual(dict(loaded.committed), {"v": [[[]]]})
+
+    def test_the_total_clause_does_not_absorb_a_defect_in_bessemers_own_code(self) -> None:
+        """The scope of the clause, where the test above pins its width.
+
+        The total clause is only defensible because nothing of bessemer's runs inside it —
+        otherwise our bug is reported as the user's broken file, with a hint sending them to
+        inspect something that is fine. Measured before this test existed, with the
+        constructor one line higher: a valid `config.toml` came back as
+        `Unresolved(reason="...could not be parsed: TypeError: ...")`.
+
+        `Resolved.__init__` stands in for a future defect in `bessemer.outcome` — a module
+        now shared with issue 05's resolvers, so it is a type other issues will edit.
+        Patched on the class rather than on the name `config.Resolved`, because `load`
+        matches on that name and a non-class stand-in fails with `called match pattern must
+        be a class` before reaching what is under test.
+
+        This passes only once the constructor sits outside the block, which is what makes it
+        a pin rather than a restatement of the docstring.
+        """
+
+        def explode(instance: object, *args: object, **kwargs: object) -> None:
+            raise TypeError("a defect in bessemer.outcome, not in the user's file")
+
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'base = "main"\n'})
+        with mock.patch.object(Resolved, "__init__", explode):
+            with self.assertRaises(TypeError):
+                config.load(start=self.tmp, env={})
+
+    def test_the_total_clause_does_not_swallow_a_keyboard_interrupt(self) -> None:
+        """`except Exception`, not `except BaseException`. Ctrl-C during a load is not a
+        malformed adapter, and reporting it as one would make the file look broken.
+
+        Driven by patching `tomllib.load`, because there is no config file that provokes a
+        `KeyboardInterrupt` — the point under test is the width of the clause, and that is
+        the only thing this fixture stands in for.
+        """
+
+        def interrupt(*args: object, **kwargs: object) -> object:
+            raise KeyboardInterrupt
+
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'base = "main"\n'})
+        with mock.patch.object(tomllib, "load", interrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                config.load(start=self.tmp, env={})
 
     def test_a_dangling_symlink_is_an_absent_layer(self) -> None:
         """The named limit in `_read_layer`: a symlink to nothing raises
@@ -356,8 +498,8 @@ class MalformedTest(TreeTest):
         adapter = self.make_adapter(self.tmp)
         (adapter / config.COMMITTED_FILE).mkdir()
         loaded = config.load(start=self.tmp, env={})
-        self.assertIsInstance(loaded, NotLoaded)
-        assert isinstance(loaded, NotLoaded)
+        self.assertIsInstance(loaded, Unresolved)
+        assert isinstance(loaded, Unresolved)
         self.assertIn("could not be read", loaded.reason)
 
 
@@ -468,6 +610,203 @@ class SourceKeyTest(TreeTest):
         loaded = self.load(self.tmp)
         self.assertIsNone(loaded.get("source"))
         self.assertIsNone(loaded.layer_of("source"))
+
+
+NESTING_DEPTH = 5000
+"""Bracket depth for the deeply-nested fixture below.
+
+Far past the recursion limit rather than near it. Measured on this machine: 300 levels
+parses cleanly, 600 raises — so the threshold is a property of how much stack is left when
+the parser is entered, which varies with the runner, the platform, and how deep in a test
+the call happens. A depth chosen just above the observed limit would be a test that passes
+here and parses cleanly under a different runner, taking the total clause's only coverage
+with it.
+
+**Whether the interpreter raises or dies is a platform question, and it is covered rather
+than assumed.** CPython's guard is a recursion counter, not a stack probe, so on a build
+whose C stack is smaller than the counter allows this could segfault instead. That would not
+be silent: CI runs `make check` on `ubuntu-latest`, so this fixture executes on Linux/glibc
+on every pull request, and a crashed interpreter fails the Makefile's summary-line gate —
+which exists precisely because a vanished runner exits 0 (see the `SUITE_FINISHED` comment).
+A hard crash therefore shows up as a red build naming this file, not as lost coverage.
+"""
+
+
+class FailureCaseTest(TreeTest):
+    """The five ways `load` can fail, produced side by side and compared.
+
+    Each already has its own test above, and each of those asserts a substring. None of
+    them can see that two cases have collapsed into the same wording — an `except` clause
+    deleted, or two clauses given one shared hint, leaves every individual assertion green
+    while a user reading the output can no longer tell which mistake they made.
+
+    The five are restated here by hand. On its own that closes the set against *collapse*
+    and nothing else: `CASE_NAMES` was previously compared only against `cases()`, which is
+    hand-written beside it, so the two agreed with each other while saying nothing about
+    the module. A sixth `except PermissionError` clause with its own reason and hint was
+    planted in `_read_layer` and the whole suite stayed green.
+
+    So the literal is anchored to the module's own AST — the handler list in `_read_layer`
+    and the number of `Unresolved` constructions — the way `tests/test_config_purity.py`
+    already walks this source. Growth now costs an edit here as well as in the module,
+    which is what the criterion asks for.
+
+    Distinguishability rests entirely on this prose. There is no tag and no subtype (see
+    the module docstring of `bessemer.config`), so a caller that wanted to branch would
+    have to match substrings — and a rewording would break it silently. Recorded here
+    rather than fixed by inventing a tag nothing reads yet.
+    """
+
+    CASE_NAMES = [
+        "absorbed by the total clause",
+        "not UTF-8",
+        "not found",
+        "unparseable TOML",
+        "unreadable",
+    ]
+    """Every way `load` can fail, sorted. Hand-written; see the class docstring."""
+
+    HANDLERS = [
+        "FileNotFoundError",
+        "UnicodeDecodeError",
+        "tomllib.TOMLDecodeError",
+        "OSError",
+        "Exception",
+    ]
+    """Every `except` clause in `_read_layer`, as written and in order. Hand-written.
+
+    Five handlers and five cases is a coincidence of arithmetic, not a correspondence, and
+    the two lists must not be tied together: `FileNotFoundError` produces no failure at all
+    — an absent layer is an empty layer — and the "not found" case comes from `load`, which
+    has no handler. They are asserted separately for that reason.
+
+    The order is part of the assertion. `Exception` last is what leaves the specific clauses
+    reachable; `FileNotFoundError` before `OSError` is what keeps a missing file from being
+    reported as unreadable.
+    """
+
+    def cases(self) -> dict[str, Unresolved]:
+        """One `Unresolved` per failure case, keyed by the name used in the criteria."""
+        no_adapter = self.tmp / "no-adapter"
+        no_adapter.mkdir()
+
+        syntax = self.make_adapter(self.tmp / "syntax", {config.COMMITTED_FILE: "base = \n"})
+        encoding = self.make_adapter(self.tmp / "encoding")
+        (encoding / config.COMMITTED_FILE).write_bytes(b'base = "\xff"\n')
+        unreadable = self.make_adapter(self.tmp / "unreadable")
+        (unreadable / config.COMMITTED_FILE).mkdir()
+        nested = self.make_adapter(
+            self.tmp / "nested",
+            {config.COMMITTED_FILE: nested_arrays(NESTING_DEPTH)},
+        )
+
+        starts = {
+            "not found": no_adapter,
+            "unparseable TOML": syntax.parent,
+            "not UTF-8": encoding.parent,
+            "unreadable": unreadable.parent,
+            "absorbed by the total clause": nested.parent,
+        }
+        found: dict[str, Unresolved] = {}
+        for name, start in starts.items():
+            loaded = config.load(start=start, env={})
+            assert isinstance(loaded, Unresolved), (name, loaded)
+            found[name] = loaded
+        return found
+
+    def test_read_layer_catches_exactly_these_types_in_this_order(self) -> None:
+        """Read out of the module's AST, so a sixth clause fails here.
+
+        This is the half `CASE_NAMES` alone could not provide: a planted
+        `except PermissionError` with its own reason and hint left the suite green and
+        exit 0, because every other assertion in this file compares one hand-written list
+        against another.
+        """
+        self.assertEqual(read_layer_handlers(), self.HANDLERS)
+
+    def test_the_module_produces_one_failure_per_named_case(self) -> None:
+        """The second anchor, and the one that also covers `load`.
+
+        `read_layer_handlers` cannot see a case added outside `_read_layer` — a second
+        early return in `load`, say — and counting `Unresolved` constructions cannot see a
+        handler added that returns something else. Neither subsumes the other.
+        """
+        self.assertEqual(unresolved_sites(), len(self.CASE_NAMES))
+
+    def test_there_are_five_failure_cases_and_no_two_read_alike(self) -> None:
+        cases = self.cases()
+        self.assertEqual(sorted(cases), self.CASE_NAMES)
+        pairs = [(outcome.reason, outcome.hint) for outcome in cases.values()]
+        self.assertEqual(len(set(pairs)), len(pairs))
+        # Reason and hint separately, not only as a pair: two cases sharing a hint while
+        # differing in an exception's own text still produce five distinct pairs above, and
+        # a shared hint is the collapse a user actually feels.
+        self.assertEqual(len({reason for reason, _ in pairs}), len(pairs))
+        self.assertEqual(len({hint for _, hint in pairs}), len(pairs))
+
+    def test_every_failure_case_carries_both_a_reason_and_a_hint(self) -> None:
+        for name, outcome in self.cases().items():
+            with self.subTest(case=name):
+                self.assertTrue(outcome.reason, name)
+                self.assertTrue(outcome.hint, name)
+
+    def test_every_failure_about_a_file_names_that_file(self) -> None:
+        """The four file-shaped cases name `config.toml`; "not found" has no file to name
+        and names the directory the walk started from instead."""
+        cases = self.cases()
+        for name in (
+            "unparseable TOML",
+            "not UTF-8",
+            "unreadable",
+            "absorbed by the total clause",
+        ):
+            with self.subTest(case=name):
+                self.assertIn(config.COMMITTED_FILE, cases[name].reason)
+        self.assertIn(str(self.tmp / "no-adapter"), cases["not found"].reason)
+
+
+class NarrowingTest(TreeTest):
+    """`match` over the union, with the value's type checked rather than described.
+
+    `assert_type` is the assertion here, and it is a static one: mypy fails the build if the
+    narrowed type is not exactly what is written, and `make check` runs mypy over `tests/`.
+    Written this way because a runtime `assertIsInstance` cannot see the difference between
+    a correctly generic `Resolved[Config]` and a `Resolved[Any]` that has quietly erased
+    every call site's type — which is the failure this criterion is about.
+    """
+
+    def test_a_loaded_config_narrows_to_config_in_a_match_block(self) -> None:
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'base = "main"\n'})
+        match config.load(start=self.tmp, env={}):
+            case Resolved(value=loaded):
+                assert_type(loaded, Config)
+                # Exercised, not merely annotated: a member access is what would fail if
+                # `loaded` came back as `object`.
+                self.assertEqual(loaded.get("base"), "main")
+            case Unresolved(reason=reason):
+                self.fail(reason)
+
+    def test_a_failed_load_narrows_to_unresolved_in_a_match_block(self) -> None:
+        match config.load(start=self.tmp, env={}):
+            case Resolved(value=loaded):
+                self.fail(f"expected no adapter, got {loaded.root}")
+            case Unresolved(reason=reason, hint=hint):
+                assert_type(reason, str)
+                assert_type(hint, str)
+                self.assertIn(config.ADAPTER_DIR, reason)
+
+    def test_the_two_cases_exhaust_the_union(self) -> None:
+        """`assert_never` is a compile-time claim that nothing else can reach it. If a third
+        member were ever added to the union, mypy fails here — which is the whole reason the
+        return type is a closed union rather than an `Outcome` protocol."""
+        for start in (self.tmp, self.make_adapter(self.tmp / "real").parent):
+            match config.load(start=start, env={}):
+                case Resolved():
+                    pass
+                case Unresolved():
+                    pass
+                case unreachable:
+                    assert_never(unreachable)
 
 
 if __name__ == "__main__":

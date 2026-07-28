@@ -13,7 +13,10 @@ Three angles, because each misses what the others catch:
 2. **Transitive.** A fresh interpreter that imports `bessemer.config` and nothing else must
    not have `subprocess` in `sys.modules`. Catches the indirect case the static pass cannot
    see — `config` importing a bessemer module that imports the wrapper — and it is the only
-   angle here that would survive the import arriving through a helper added later.
+   angle here that would survive the import arriving through a helper added later. It is
+   also the only angle covering `bessemer.outcome`, which `config` now imports: the static
+   pass walks `config.py` alone, so a spawn added to `outcome.py` would be invisible to it
+   and would show up here.
 3. **Runtime.** Every spawn entry point and both `bessemer.proc` functions are replaced with
    something that raises, and the whole public surface is then driven through its success
    and failure paths. Catches what a static walk cannot follow at all: `getattr`,
@@ -34,6 +37,7 @@ from pathlib import Path
 from unittest import mock
 
 from bessemer import config, proc
+from bessemer.outcome import Resolved, Unresolved
 from tests.guard import SPAWN_ENTRY_POINTS
 from tests.test_argv_boundary import violations
 
@@ -173,12 +177,12 @@ class RuntimeTest(unittest.TestCase):
                 env={"BESSEMER_SOURCE": "git+https://example.invalid@v1"},
                 flags={"base": None},
             )
-            assert isinstance(loaded, config.Config)
-            self.assertEqual(loaded.root, self.tmp)
-            self.assertEqual(loaded.get("base"), "main")
-            self.assertEqual(loaded.get("specs_dir"), "elsewhere")
-            self.assertEqual(loaded.layer_of("source"), config.ENV)
-            self.assertEqual(loaded.unknown_keys(), ())
+            assert isinstance(loaded, Resolved), loaded
+            self.assertEqual(loaded.value.root, self.tmp)
+            self.assertEqual(loaded.value.get("base"), "main")
+            self.assertEqual(loaded.value.get("specs_dir"), "elsewhere")
+            self.assertEqual(loaded.value.layer_of("source"), config.ENV)
+            self.assertEqual(loaded.value.unknown_keys(), ())
 
     def test_the_failure_paths_spawn_nothing_either(self) -> None:
         missing = self.tmp / "no-adapter-here"
@@ -191,8 +195,8 @@ class RuntimeTest(unittest.TestCase):
 
         with every_spawn_path_refused():
             self.assertIsNone(config.find_adapter_dir(missing))
-            self.assertIsInstance(config.load(start=missing, env={}), config.NotLoaded)
-            self.assertIsInstance(config.load(start=broken, env={}), config.NotLoaded)
+            self.assertIsInstance(config.load(start=missing, env={}), Unresolved)
+            self.assertIsInstance(config.load(start=broken, env={}), Unresolved)
 
 
 if __name__ == "__main__":

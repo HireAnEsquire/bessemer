@@ -1,6 +1,6 @@
 # 04a — The outcome type
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 04
 
@@ -42,11 +42,23 @@ already does this natively. Revisit only if callers pass roughly ten.
 - [ ] Both are frozen, and a test pins that — a mutable outcome is a value that can be
       edited after the decision that produced it
 - [ ] `bessemer/config.py`'s `load()` returns `Resolved[Config] | Unresolved`, and
-      `NotLoaded` is gone from the package. Its four cases — not found, unparseable TOML,
-      a non-UTF-8 file, and an unreadable file — survive as distinguishable `reason`/`hint`
-      pairs, each still naming the offending file where it named one before. Distinguish-
-      ability currently rests entirely on prose substrings, with no tag or subtype; that is
-      the bar, and a reworded reason breaks a caller no test represents. If unifying the
-      types makes a tag natural, say so rather than adding one silently
+      `NotLoaded` is gone from the package. Its cases — not found, unparseable TOML, a
+      non-UTF-8 file, an unreadable file, and whatever the total clause catches — survive as
+      distinguishable `reason`/`hint` pairs, each still naming the offending file where it
+      named one before. Distinguishability currently rests entirely on prose substrings,
+      with no tag or subtype; that is the bar, and a reworded reason breaks a caller no test
+      represents. If unifying the types makes a tag natural, say so rather than adding one
+      silently
+- [ ] **The failure cases are pinned by a hand-written literal, and the set is closed.**
+      A test names every case and asserts no two share a `reason` or a `hint` — case
+      collapse is invisible to the per-case substring assertions, since each of those stays
+      green when a clause is deleted and another absorbs it.
+
+      **The set must be closed against growth as well as collapse, and against the module
+      rather than against the fixtures.** A literal compared only to a hand-written fixture
+      list restates the fixtures — add a sixth `except` clause to `_read_layer` and both
+      sides stay in agreement while the module has changed underneath them. Count the
+      handlers in the source with `ast`, the way `tests/test_config_purity.py` already
+      walks the module, and assert that count against the literal
 - [ ] `tests/test_config.py` still passes, with its assertions rewritten against the new
       type rather than deleted
