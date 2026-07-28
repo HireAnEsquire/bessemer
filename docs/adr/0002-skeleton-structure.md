@@ -37,10 +37,14 @@ and that single requirement forces most of what follows.
   environment because the push path genuinely needs it (`SSH_AUTH_SOCK`, credential helpers), and
   the environment that actually matters is the one crossing into the container, which is docker's
   `-e` arguments — already governed by the argv rule. Enforced by an AST test: no subprocess
-  machinery outside the wrapper, and inside it an allowlist of `subprocess.run` and
-  `subprocess.Popen` only. Allowlist rather than blocklist, because a blocklist loses to the next
+  machinery outside the wrapper, and inside it an allowlist drawn at **what can spawn**:
+  `subprocess.run` and `subprocess.Popen`, plus the inert names `PIPE`, `STDOUT`, `DEVNULL` and
+  `TimeoutExpired`. Allowlist rather than blocklist, because a blocklist loses to the next
   function someone finds (`getoutput` and `getstatusoutput` both shell out and trip neither an
-  import check nor a `shell=True` check).
+  import check nor a `shell=True` check). The inert names are integers and an exception class:
+  none can execute anything, and banning them would forbid the `stdin=DEVNULL` the wrapper
+  requires and the `stdout=PIPE` F3's streaming needs — leaving the first person to write either
+  with a choice between widening a security allowlist under deadline and working around it.
   - *Rejected: a strict env allowlist everywhere* — the stronger-sounding posture, but it breaks
     `git push` and `gh` in ways that vary per adopter machine, to defend a boundary that was
     never the one under threat.

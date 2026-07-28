@@ -169,3 +169,51 @@ test cannot swallow it.
 If a test needs something the allowlist denies, it needs a temporary fixture it creates
 and destroys, or a mock. Reach for the allowlist only when the binary itself is the thing
 under test.
+
+## Tests that pass for the wrong reason
+
+The recurring defect shape in this feature is not a test that fails; it is a test that
+passes for a reason other than the one in its name, and goes on passing after the
+behaviour it names is deleted. Two cases are load-bearing enough to write down, because
+both are invisible on a green run.
+
+**A missing binary raises `GuardViolation`, not `FileNotFoundError`.** The guard checks
+the program *before* the spawn happens, so an obviously-absent name like
+`no-such-program` never reaches the operating system: the guard refuses it first. A test
+meaning to prove that `bessemer.proc.run` lets an `OSError` propagate would therefore pass
+on the guard's refusal instead — and keep passing if `run` were changed to swallow
+`OSError` entirely.
+
+The fix is to name a program the allowlist **permits**, at a path that does not exist:
+`tests/test_proc.py` spawns `<a temporary directory>/git`. The basename is `git`, so the
+guard waves it through; the path is not there, so the kernel is what refuses it, which is
+the thing under test. Any test about how a spawn *fails* needs this treatment.
+
+**A child cannot block on stdin that is not a terminal — and whether it is one is a
+property of the host, not of the code.** `make check` redirects only stderr, so fd 0 is
+inherited from whoever ran it: the developer's terminal under an interactive shell, a pipe
+or `/dev/null` under CI and under most editors. Both happen, routinely.
+
+That cuts two ways, and each has already produced a defect here.
+
+A test checking that `run` closes its child's stdin passes for free wherever fd 0 is *not*
+a terminal: the child reads EOF immediately whether or not the wrapper closed anything, so
+the test stays green on an implementation that stopped doing it. `StdinTest` therefore
+builds a real pty with `pty.openpty` and `dup2`s it onto fd 0 for the duration, restoring
+it afterwards. (`pty.openpty` forks nothing and is not on the denied list; `pty.spawn`
+is.) It runs a *control* alongside the assertion — the same child, spawned through
+`subprocess` with stdin inherited, which must consume the entire timeout — because without
+the control the fixture itself could be broken and the real test would still look green.
+
+The other direction: **no test may assert anything about the ambient fd 0.** An
+`assertFalse(os.isatty(0))` outside the fixture is an assertion about the host. It is
+green in CI and green in an agent session, and red under `make check` in an interactive
+shell — failing on a correct implementation in the one place a human is watching, and
+passing in the one place they are not. Capture what fd 0 was, assert only inside the
+fixture, and check restoration against what was captured. **The suite must pass whether or
+not the runner's stdin is a terminal**, which means verifying it both ways:
+
+```
+uv run python -m unittest discover                     # ordinary runner
+script -q /dev/null uv run python -m unittest discover  # with a tty on fd 0
+```
