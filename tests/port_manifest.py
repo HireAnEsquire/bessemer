@@ -271,6 +271,42 @@ SHIM_FOR_BASH = (
     "would type, and is excluded when the subcommand exists so bash could reach python."
 )
 
+_LEDGER_SHIM_SCOPE = (
+    "measured rather than argued: run.sh invokes it and nothing else does, and its output "
+    "is written for bash to parse. A python dispatcher calls the ledger functions directly, "
+    "so the subcommand crosses the boundary the rewrite exists to delete, and porting it "
+    "would add a user-facing CLI surface for a flow nobody can reach until F3. Decision 5 "
+    "of the F2 README: a cmd_* test splits when a human would type the subcommand, and is "
+    "excluded when the subcommand exists so bash could reach python. Excluding a shim must "
+    "not drop behaviour with it — what this class asserted and nothing else does landed in "
+    "bessemer/ledger.py with tests of bessemer's own, unmarked, because no upstream test "
+    "covers those pieces separately and this manifest must not claim one does."
+)
+
+CMD_LEDGER_SHIM = (
+    f"ledger-append (run.sh:1622) and ledger-last-base (run.sh:881) are bash-to-python "
+    f"shims, {_LEDGER_SHIM_SCOPE} This class's own claims are dispositioned below, using the "
+    f"three dispositions the F2 README names. Covered elsewhere: the ledger's location "
+    f"comes from the specs "
+    f"directory, which is CentralLedgerPathTests, ported. Landed: --task-dir is recorded as "
+    f"a fact, which is RunRecordTest, and the --issue NUM=OUTCOME parsing and its refusal, "
+    f"which is ParseIssueOutcomesTest, both in tests/test_ledger.py. Asserted upstream and "
+    f"structurally unreachable here: the *negative* half of the same claim — that nothing "
+    f"was written to the source directory, and that a rejected argument writes no central "
+    f"file at all. Both were assertFalse(...exists()) against a subcommand that owned the "
+    f"whole flow; run_record returns a dict and append_ledger writes where it is told, so "
+    f"'nothing was written' has no host in the new shape and no test here covers it."
+)
+
+CMD_LAST_SHIM = (
+    f"last (run.sh:697) is a bash-to-python shim, {_LEDGER_SHIM_SCOPE} It is the clearest "
+    f"case in the feature: run.sh reads its output with IFS='=' read -r, so the key=value "
+    f"format exists solely for bash, and the --last flag it backs is a dispatch option in "
+    f"bessemer rather than a subcommand. Both of its assertions survive in ResolveLastTests, "
+    f"which is ported whole: the newest record wins, and an empty ledger refuses with 'no "
+    f"runs recorded yet'."
+)
+
 MIGRATION_DEAD_ON_ARRIVAL = f"A direct test of the dropped function. {_MIGRATION_SCOPE}"
 
 MIGRATION_REACHED_INDIRECTLY = (
@@ -288,6 +324,7 @@ MIGRATION_REACHED_INDIRECTLY = (
 #: entries, and a typo in one of those repetitions is a failure whose message is about a
 #: missing marker rather than about a misspelling.
 ISSUES = "tests.test_issues"
+LEDGER = "tests.test_ledger"
 
 
 # ---------------------------------------------------------------------------------------
@@ -368,33 +405,84 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "LedgerTests": (
-        pending("test_append_writes_one_well_formed_line"),
-        pending("test_append_is_one_line_per_call"),
-        pending("test_last_base_for_branch_returns_most_recent"),
-        pending("test_last_base_for_unknown_branch_is_none"),
-        pending("test_missing_ledger_degrades_to_none"),
-        pending("test_corrupt_ledger_lines_are_skipped_not_fatal"),
-        pending("test_undecodable_ledger_degrades_to_none_not_fatal"),
-        pending("test_deleting_ledger_mid_feature_next_run_defaults_to_none"),
-        pending("test_append_ledger_write_failure_does_not_raise"),
+        ported(
+            "test_append_writes_one_well_formed_line",
+            Counterpart(LEDGER, "test_appending_writes_one_well_formed_json_line"),
+        ),
+        ported(
+            "test_append_is_one_line_per_call",
+            Counterpart(LEDGER, "test_each_append_adds_exactly_one_line"),
+        ),
+        ported(
+            "test_last_base_for_branch_returns_most_recent",
+            Counterpart(LEDGER, "test_the_last_base_for_a_branch_is_its_most_recent_one"),
+        ),
+        ported(
+            "test_last_base_for_unknown_branch_is_none",
+            Counterpart(LEDGER, "test_a_branch_that_never_ran_has_no_last_base"),
+        ),
+        ported(
+            "test_missing_ledger_degrades_to_none",
+            Counterpart(LEDGER, "test_a_missing_ledger_reads_as_no_records"),
+        ),
+        ported(
+            "test_corrupt_ledger_lines_are_skipped_not_fatal",
+            Counterpart(LEDGER, "test_a_malformed_line_is_skipped_rather_than_raised"),
+        ),
+        ported(
+            "test_undecodable_ledger_degrades_to_none_not_fatal",
+            Counterpart(LEDGER, "test_a_ledger_that_is_not_text_reads_as_no_records"),
+        ),
+        ported(
+            "test_deleting_ledger_mid_feature_next_run_defaults_to_none",
+            Counterpart(
+                LEDGER, "test_deleting_the_ledger_mid_feature_drops_the_next_runs_default"
+            ),
+        ),
+        ported(
+            "test_append_ledger_write_failure_does_not_raise",
+            Counterpart(LEDGER, "test_a_write_failure_does_not_raise"),
+        ),
     ),
-    "CentralLedgerPathTests": (pending("test_is_tasks_dir_parent_slash_runs_jsonl"),),
+    "CentralLedgerPathTests": (
+        ported(
+            "test_is_tasks_dir_parent_slash_runs_jsonl",
+            Counterpart(LEDGER, "test_the_ledger_sits_beside_the_specs_directory"),
+        ),
+    ),
     "CmdLedgerAppendLastBaseTests": (
-        pending("test_cmd_ledger_append_parses_issue_flags"),
-        pending("test_cmd_ledger_append_rejects_malformed_issue_flag"),
-        pending("test_cmd_ledger_append_writes_to_central_file_not_task_dir"),
-        pending("test_cmd_ledger_last_base_reads_central_file"),
-        pending("test_cmd_ledger_last_base_ignores_task_dir_scoping"),
-        pending("test_cmd_ledger_last_base_no_record_prints_nothing"),
+        excluded("test_cmd_ledger_append_parses_issue_flags", CMD_LEDGER_SHIM),
+        excluded("test_cmd_ledger_append_rejects_malformed_issue_flag", CMD_LEDGER_SHIM),
+        excluded("test_cmd_ledger_append_writes_to_central_file_not_task_dir", CMD_LEDGER_SHIM),
+        excluded("test_cmd_ledger_last_base_reads_central_file", CMD_LEDGER_SHIM),
+        excluded("test_cmd_ledger_last_base_ignores_task_dir_scoping", CMD_LEDGER_SHIM),
+        excluded("test_cmd_ledger_last_base_no_record_prints_nothing", CMD_LEDGER_SHIM),
     ),
     "NewestRecordForBranchTests": (
-        pending("test_returns_most_recent_record_regardless_of_task_dir"),
-        pending("test_no_record_returns_none"),
+        ported(
+            "test_returns_most_recent_record_regardless_of_task_dir",
+            Counterpart(
+                LEDGER, "test_the_newest_record_for_a_branch_ignores_which_source_it_ran_from"
+            ),
+        ),
+        ported(
+            "test_no_record_returns_none",
+            Counterpart(LEDGER, "test_a_branch_with_no_record_has_no_newest_one"),
+        ),
     ),
     "RecentDistinctBranchesTests": (
-        pending("test_newest_first_deduped"),
-        pending("test_respects_limit"),
-        pending("test_empty_ledger_returns_empty"),
+        ported(
+            "test_newest_first_deduped",
+            Counterpart(LEDGER, "test_recent_branches_come_back_newest_first_and_deduped"),
+        ),
+        ported(
+            "test_respects_limit",
+            Counterpart(LEDGER, "test_recent_branches_stop_at_the_limit"),
+        ),
+        ported(
+            "test_empty_ledger_returns_empty",
+            Counterpart(LEDGER, "test_an_empty_ledger_has_no_recent_branches"),
+        ),
     ),
     "ResolveResumeTests": (
         pending("test_feature_mode_task_dir_is_the_feature_folder"),
@@ -431,13 +519,24 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_prints_message_when_refusing"),
     ),
     "ResolveLastTests": (
-        pending("test_returns_newest_record_overall_regardless_of_branch"),
-        pending("test_no_outcome_filtering_a_failed_run_can_be_newest"),
-        pending("test_empty_ledger_raises"),
+        ported(
+            "test_returns_newest_record_overall_regardless_of_branch",
+            Counterpart(
+                LEDGER, "test_the_last_run_is_the_newest_record_whatever_branch_it_was_on"
+            ),
+        ),
+        ported(
+            "test_no_outcome_filtering_a_failed_run_can_be_newest",
+            Counterpart(LEDGER, "test_a_failed_run_can_be_the_last_one"),
+        ),
+        ported(
+            "test_empty_ledger_raises",
+            Counterpart(LEDGER, "test_an_empty_ledger_refuses_rather_than_returning_nothing"),
+        ),
     ),
     "CmdLastTests": (
-        pending("test_prints_newest_record_fields"),
-        pending("test_empty_ledger_exits_2_with_refusal_on_stderr"),
+        excluded("test_prints_newest_record_fields", CMD_LAST_SHIM),
+        excluded("test_empty_ledger_exits_2_with_refusal_on_stderr", CMD_LAST_SHIM),
     ),
     "StripFeedbackEditTextTests": (
         ported(
@@ -483,9 +582,20 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_results_are_sorted"),
     ),
     "CollectRecentLedgerRecordsTests": (
-        pending("test_gathers_from_central_file_newest_first"),
-        pending("test_no_ledger_returns_empty"),
-        pending("test_corrupt_ledger_is_skipped_not_fatal"),
+        ported(
+            "test_gathers_from_central_file_newest_first",
+            Counterpart(LEDGER, "test_records_come_back_from_the_central_file_newest_first"),
+        ),
+        ported(
+            "test_no_ledger_returns_empty",
+            Counterpart(LEDGER, "test_no_ledger_collects_no_records"),
+        ),
+        ported(
+            "test_corrupt_ledger_is_skipped_not_fatal",
+            Counterpart(
+                LEDGER, "test_a_corrupt_ledger_collects_no_records_rather_than_raising"
+            ),
+        ),
         excluded(
             "test_triggers_legacy_migration_when_central_file_missing",
             MIGRATION_REACHED_INDIRECTLY,
@@ -707,11 +817,32 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_skips_past_multiple_taken_suffixes"),
     ),
     "LedgerBranchHelpersTests": (
-        pending("test_branch_order_is_most_recent_first_deduped"),
-        pending("test_branch_order_scoped_to_task_dir_ignores_other_dirs"),
-        pending("test_annotate_branch_includes_base_issues_and_pr"),
-        pending("test_annotate_branch_with_no_ledger_record_returns_bare_name"),
-        pending("test_annotate_branch_ignores_same_branch_in_other_task_dir"),
+        ported(
+            "test_branch_order_is_most_recent_first_deduped",
+            Counterpart(LEDGER, "test_branch_order_is_most_recent_first_and_deduped"),
+        ),
+        ported(
+            "test_branch_order_scoped_to_task_dir_ignores_other_dirs",
+            Counterpart(LEDGER, "test_branch_order_ignores_branches_run_from_another_source"),
+        ),
+        ported(
+            "test_annotate_branch_includes_base_issues_and_pr",
+            Counterpart(
+                LEDGER, "test_an_annotated_branch_carries_its_base_issues_and_pull_request"
+            ),
+        ),
+        ported(
+            "test_annotate_branch_with_no_ledger_record_returns_bare_name",
+            Counterpart(
+                LEDGER, "test_a_branch_the_ledger_does_not_know_annotates_to_its_bare_name"
+            ),
+        ),
+        ported(
+            "test_annotate_branch_ignores_same_branch_in_other_task_dir",
+            Counterpart(
+                LEDGER, "test_annotation_ignores_the_same_branch_run_from_another_source"
+            ),
+        ),
     ),
     "PickIssuesTests": (
         excluded("test_auto_skips_prompt_when_one_issue", PICKER_ISSUES),
@@ -731,9 +862,18 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_falls_back_to_no_pr_yet_when_neither_outcome_nor_pr_recorded"),
     ),
     "LatestPerBranchTests": (
-        pending("test_keeps_only_the_first_record_seen_per_branch"),
-        pending("test_caps_at_limit"),
-        pending("test_skips_records_with_missing_or_non_string_branch"),
+        ported(
+            "test_keeps_only_the_first_record_seen_per_branch",
+            Counterpart(LEDGER, "test_only_the_first_record_seen_per_branch_survives"),
+        ),
+        ported(
+            "test_caps_at_limit",
+            Counterpart(LEDGER, "test_the_result_is_capped_at_the_limit"),
+        ),
+        ported(
+            "test_skips_records_with_missing_or_non_string_branch",
+            Counterpart(LEDGER, "test_a_record_with_no_usable_branch_is_skipped"),
+        ),
     ),
     "ResumeIssueCountTests": (
         pending("test_spec_mode_is_always_zero"),

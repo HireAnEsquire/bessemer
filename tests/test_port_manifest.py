@@ -171,6 +171,13 @@ WHOLLY_EXCLUDED_CLASSES = frozenset(
         "SummaryMenuTests",
         "MigrateLegacyLedgersTests",
         "CmdFeedbackEditStripTests",
+        # Issue 02, applying decision 5's shim rule to the three ledger subcommands:
+        # ledger-append (run.sh:1622), ledger-last-base (run.sh:881) and last (run.sh:697)
+        # are each invoked by run.sh and by nothing else, and `last`'s key=value output is
+        # read back with `IFS='=' read -r`. A python dispatcher calls append_ledger and
+        # last_base_for_branch directly, so there is no split to make.
+        "CmdLedgerAppendLastBaseTests",
+        "CmdLastTests",
     }
 )
 
@@ -194,7 +201,7 @@ PARTIALLY_EXCLUDED_TESTS = frozenset(
     }
 )
 
-EXCLUDED_TEST_COUNT = 141
+EXCLUDED_TEST_COUNT = 149
 
 # What `unittest discover` collects: modules matching `test*.py`, methods prefixed `test`,
 # on `TestCase` subclasses. A counterpart recorded outside that set satisfies the binding

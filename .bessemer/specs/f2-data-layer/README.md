@@ -100,9 +100,34 @@ Five, settled before any issue was written.
    whole of that test is the shim. Excluded, taking exclusions to **141** and pending to
    **196**.
 
-   Each remaining `cmd_*` class is judged the same way by its own issue. `status` and `gc`
-   are commands a human types. `ledger-last-base`, `info`, `select` are the ones to look at
-   hardest.
+   Each remaining `cmd_*` class is judged the same way by its own issue. Settled so far:
+
+   - **Excluded as shims**: `feedback-edit-strip` (issue 01), and `ledger-append`,
+     `ledger-last-base` and `last` (issue 02). The last of those is the clearest case in the
+     feature — `run.sh:697` parses its output with `IFS='=' read -r`, so the `key=value`
+     format exists solely for bash to read.
+   - **Still open**: `status` and `gc`, which are commands a human types, and are therefore
+     the ones expected to split.
+
+   **`PORTED_SPLIT` has still never fired on real data.** Issue 04's `CmdStatusTests` or
+   issue 05's `CmdGcTests` will be the first, or it never fires at all — in which case the
+   path should be deleted rather than left as machinery nothing uses.
+
+   **Excluding a shim must not drop behaviour.** A shim's tests sometimes assert real
+   computation that no other class covers — argument-to-record mapping, for instance. Check
+   before excluding; where something is uncovered, it lands in the core module with a test
+   bessemer writes, *unmarked*, because no upstream test covers it and the manifest must not
+   claim one does.
+
+   **There are three dispositions for a shim's assertion, not two.** Landed, covered
+   elsewhere, or **asserted upstream and structurally unreachable here** — which is real and
+   needs its own name. Issue 02's `assertFalse(central_path.exists())` after a rejected
+   argument is one: `run_record` returns a dict and `append_ledger` writes where it is told,
+   so "nothing was written" has no host in the new shape. Given only two dispositions, an
+   implementer must either overclaim coverage or say nothing, and both hide the same fact.
+   Name it in the exclusion reason, and never write a reason claiming a test covers what it
+   does not — the manifest is the drift control, and a false reason is the failure it exists
+   to prevent.
 
    Each genuine split typically asserts two things: what was computed and what was printed. The computation half lands in the core
    module's tests unchanged; the rendering half becomes a CLI test against `bessemer/cli.py`,
@@ -150,6 +175,10 @@ Five, settled before any issue was written.
    who calls it, not by the leading underscore upstream happened to use — and say in your
    report which ones you promoted, so the issue that consumes them is not guessing.
 
+   **Destination module constants live in the manifest, beside `ISSUES` and `LEDGER`.** Each
+   port issue adds one. Stated because issue 02 found the convention by imitation and issues
+   03, 04 and 05 would each have rediscovered it.
+
    **Where there is no enumeration, invent none.** F1's rule that every list needs a
    hand-written literal exists because a test derived from the list it checks cannot notice
    the list shrinking. A module that owns no list needs no such pin, and manufacturing one
@@ -187,6 +216,45 @@ Five, settled before any issue was written.
    8. `materialize_ad_hoc` uses `datetime.now()`, so `TZ` changes the *date* in a filename
       that is the run's identity. No test catches it because all three upstream tests pass
       an explicit timestamp, never exercising the default branch.
+
+   9. **`append_ledger` is not non-raising.** It catches `OSError`, so a record holding a
+      non-serializable value takes `json.dumps`' `TypeError` straight out — reproduced:
+      `TypeError: Object of type PosixPath is not JSON serializable`. `Path` is exactly what
+      F3 is likeliest to pass for `source_dir`, and the docstring says this call happens
+      *after* the push and the pull request and must never undo them. It fails at the one
+      moment its contract exists to protect. **The most dangerous entry on this list for
+      F3.**
+   10. **The ledger holds two disagreeing definitions of "newest".** `resolve_last`,
+       `newest_record_for_branch` and `last_base_for_branch` use *file order*;
+       `collect_recent_ledger_records` sorts by *timestamp*. Reproduced: with a 10:00 record
+       written before an 09:00 one, `resolve_last` returns the 09:00. So `--last` and the
+       status table's top row can name different runs from one ledger. Live triggers: a clock
+       step, a record with no timestamp, or two concurrent dispatches where one stamps early
+       and writes late. Both orders are documented in their own docstrings and nowhere
+       against each other.
+
+   11. **A non-string `timestamp` takes down the whole status read.**
+       `read_ledger` accepts `{"timestamp": 1753142400}` as data, then
+       `collect_recent_ledger_records` sorts and dies: `TypeError: '<' not supported between
+       instances of 'int' and 'str'`. Upstream's docstring claims "a missing or unparseable
+       timestamp sorts last rather than raising", which is false for this case. It is issue
+       04's status-table read path — the one command that would have shown a damaged ledger
+       is the one the damage kills.
+   12. **One non-UTF-8 byte erases the entire ledger, silently.** `read_ledger` calls
+       `read_text()` with no `encoding=`, so the platform default applies, and the
+       `UnicodeDecodeError` handler degrades the *whole file* to no records. Measured under
+       `LC_ALL=C PYTHONUTF8=0`: a ledger of two well-formed lines, one carrying a non-ASCII
+       branch name, reads back as **zero records** — the ASCII line included. Not "a corrupt
+       ledger reading as empty": total history loss from one byte in one line. Same class as
+       defect 7.
+
+   **Concurrency, measured against the port source** — 8 processes, 480 records, APFS, line
+   sizes from 130 B to 8 MB: no interleaving and no loss. `O_APPEND` makes each write's
+   offset claim atomic and a regular local file never returned a short write. No lock, no
+   `fsync`. The unmeasured limit is a *short* write — full disk, NFS — which splits a record
+   across two offsets so halves can interleave. The design answers that rather than
+   preventing it: `read_ledger` skips the torn line, costing a `--base` default and never a
+   landing. Appends are ordered by completion, not by timestamp, which is defect 10.
 
    Two claims deliberately **not** on this list, so nobody re-hunts them: `materialize_ad_hoc`
    with a `../../` branch is not a path traversal (it fails like any other slashed branch),

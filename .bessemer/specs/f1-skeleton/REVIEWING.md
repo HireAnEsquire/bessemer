@@ -133,6 +133,22 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
 A short list of findings, each with file:line, what is wrong, and what would make it right.
 Order by severity. Then one line:
 
+**Short means short. Your report is read by a human paying for every word.**
+
+- **A finding is: `file:line`, one sentence naming the defect, the output that proves it, one
+  sentence on the fix.** Nothing else. If it needs a paragraph, the extra paragraph is
+  usually the reasoning that led you there, and the reader does not need it.
+- **The verification summary is counts and results**, not a narration of method. "Mutation
+  battery, 12 mutants + 2 controls, 11 red as named, 1 survivor at `x.py:306`" is the whole
+  thing; the table only earns its space when a per-row destination or environment matters.
+- **Do not restate the issue, the decisions, or what the implementer built.** The reader has
+  all three.
+- **Non-findings are worth one line each**, so nobody re-hunts them — not a section.
+- **Cut every sentence that would still be true if the diff were different.**
+
+Depth of verification is not the thing to trim; the words around it are. A report that buries
+one confirmed defect in three screens has made it harder to act on.
+
 - `<verdict>approved</verdict>` — every acceptance criterion verified by you, no findings above
   nit level
 - `<verdict>needs-work</verdict>` — anything else, with the blocking findings named

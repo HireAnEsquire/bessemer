@@ -61,6 +61,24 @@ here is a spec bug worth fixing, not just a session to steer.
 What you built, the verification output, and **anything the spec should have told you but
 didn't**. That last one matters most: from F4 these specs are read by agents with nobody to ask.
 
+**Keep it short. The report is read by a human who is paying for every word of it.**
+
+- **Evidence stays; prose goes.** Measurements, mutation results, and counts are the report.
+  Restating what the issue asked for, re-arguing a decision already in the spec, or narrating
+  how you approached the work is not — the reader has the spec and the diff.
+- **Files as a list, not a tour.** `bessemer/x.py (new) — a, b, c` beats a paragraph per
+  function. If a design choice needs defending, it belongs in the module docstring where the
+  next reader meets it, not in a message that is read once and thrown away.
+- **A finding is one line plus its evidence**: what is wrong, where, and the output that
+  shows it. No restatement of why it matters if the line already says so.
+- **Tables only where a table earns it** — a matrix of environments against results, a
+  per-test disposition. Not for two facts.
+- **Cut every sentence that would still be true if you had done nothing.**
+
+Verbosity is not thoroughness. Do the same work and say less about it; a report that buries
+one measured defect in three screens of narration has made that defect harder to see, not
+easier.
+
 ## Your issue
 
 **01 — package skeleton.** You are setting the conventions seven more sessions will copy. Do not
