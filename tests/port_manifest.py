@@ -1,0 +1,773 @@
+"""The 337 upstream tests, classified — F2's drift control.
+
+The port source is `/Users/sbowles/hae`, branch `agentbox`, commit `e194121f75f4`, file
+`.agentbox/test_tasklib.py`: 3703 lines, 337 tests in 56 classes. F2 brings its data core
+across, and the failure mode F2 is exposed to is not a weak test — the tests come from
+upstream and are the oracle — it is **drift**: a test dropped, renamed away, split in half
+and half-landed, or excluded for a reason that sounds better than it is. Nothing in a
+review loop notices twelve tests becoming nine, and an agent comparing a 3703-line file by
+eye is being asked to do the one thing it is worst at.
+
+So the names below are the census, and `tests/test_port_manifest.py` is the check over it.
+
+**Vendored, not read from the port source.** CI has no `/Users/sbowles/hae`, and a check
+that only runs on one laptop is not a check. These names are a copy; the copy is the
+artifact. They were transcribed by walking the upstream file's AST at the pinned commit,
+so the list is a faithful copy rather than a retyping — what is hand-written, and what
+therefore catches a name going missing, is the census in `tests/test_port_manifest.py`:
+the total of 337 and the per-class counts, restated there by hand so that shrinking this
+file costs a deliberate edit in a second one.
+
+**What is pinned is the counts, not the names.** The correspondence between these strings
+and upstream's was established once, by comparison against the pinned commit, and is never
+re-checked — nothing here can re-check it, because the port source is not readable from
+CI. So mistyping a name, or swapping one class's three names for another's three, stays
+green: the counts are unchanged. That is inherent rather than an oversight, but "vendored
+census" reads as pinning more than it does, and this is the sentence that stops it.
+
+## The four dispositions
+
+`PENDING`
+    Will be ported; no counterpart in bessemer's suite yet. This is the state everything
+    portable starts in, because this manifest lands before any of the work it describes —
+    issue 00 of F2 blocks issues 01 through 04. A suite that is red on purpose for the
+    length of a feature is a suite nobody reads, which is worse than the hole it papers
+    over, so pending is green.
+
+    Pending is safe in the direction that matters. Flipping an entry to `PORTED` without
+    writing the test fails immediately, because the check then demands a counterpart that
+    is not there. The only available cheat is leaving entries pending forever, and that is
+    a visible number — the check prints it on every run — rather than an absence. Each
+    port issue flips its own slice as part of its acceptance, and F2's tracer requires
+    zero pending.
+
+`PORTED`
+    Landed, with exactly one counterpart recorded: the test module it lives in and the
+    name it goes by there. Upstream's name is the key and bessemer's name is recorded
+    beside it, because bessemer's suite favours sentence-style names and upstream does
+    not — so the mapping is the artifact rather than a coincidence of spelling.
+
+`PORTED_SPLIT`
+    A `cmd_*` test whose two halves land in different files (decision 5 of the F2 README).
+    Each such test typically asserts two things: what was computed and what was printed.
+    The computation half lands in the core module's tests; the rendering half becomes a
+    CLI test against `bessemer/cli.py`. Both destinations are recorded, in that order, so
+    a test that loses its rendering half on the way is visible rather than merely gone.
+
+`EXCLUDED`
+    Not coming, with a reason in prose that says why bessemer is better without it. Never
+    a bare flag: an exclusion is reviewable only if the reason is committed beside it.
+
+    Exclusion is per test, not per class. Nine classes are excluded whole, but two tests
+    in otherwise in-scope classes reach `_migrate_legacy_ledgers` without naming it, and
+    decision 4 drops the behaviour rather than the function. `tests/test_port_manifest.py`
+    enumerates those two by name rather than counting them, because a partial exclusion is
+    exactly the kind that hides inside a class-level count.
+
+## What this manifest cannot prove
+
+**The counterpart rule is name-based, and that is a deliberate weakness.** This file can
+prove that a test with the recorded name exists in bessemer's suite and declares itself
+the counterpart of a named upstream test. It cannot prove that test still asserts what
+upstream's did. A ported test gutted to `pass` satisfies every check here.
+
+What closes that gap is not machinery. It is the port issues' own requirement to keep
+assertions intact, and a reviewer reading the exclusions.
+
+## The binding is two-way, via a marker on the test
+
+A manifest entry names its counterpart, and the counterpart names its manifest entry back,
+through the `ported_from` decorator below. Both directions are checked:
+
+- an entry marked `PORTED` or `PORTED_SPLIT` whose counterpart is missing, renamed, or
+  moved to another module fails — that is the shrinkage direction;
+- a test in bessemer's suite carrying a `ported_from` marker that no entry claims fails —
+  that is the growth direction, and it is what keeps a renamed port and an unported test
+  from looking identical. Without it the manifest quietly stops describing the suite.
+
+**A counterpart must be somewhere `unittest discover` actually collects.** Recording one
+in a helper module, or under a name unittest does not treat as a test, would satisfy a
+naive binding while running nothing — worse than the gutted-to-`pass` weakness above,
+because a reviewer reading assertions cannot see it either. So the module's last segment
+must begin with `test_` and the counterpart's own name with `test`, and the class defining
+it must be a `unittest.TestCase`. All three are asserted.
+
+**A marker is how "upstream-derived" is identified, and its limit is that it is opt-in.**
+Nothing detects a test that was copied from upstream and left unmarked; that test simply
+reads as bessemer's own, and its manifest entry stays pending — a number that is printed,
+not an absence. The alternative — treating every test in a port destination module as
+upstream-derived — would need an exemption list for the tests F2 writes for code upstream
+did not have, and an exemption list is a quieter escape hatch than a pending count.
+
+The marker is read off the class that defines the method, so a counterpart **inherited**
+from a shared base class is invisible to the check. No such base exists in this suite; if
+one appears, this is the line that stops being true.
+
+## This is a test artifact
+
+Nothing under `bessemer/` imports this module, and `tests/test_port_manifest.py` enforces
+that. The census of a suite is not runtime state.
+"""
+
+from collections.abc import Callable
+from typing import NamedTuple
+
+UPSTREAM_COMMIT = "e194121f75f4"
+UPSTREAM_FILE = ".agentbox/test_tasklib.py"
+
+PENDING = "pending"
+PORTED = "ported"
+PORTED_SPLIT = "ported-split"
+EXCLUDED = "excluded"
+
+#: The attribute `ported_from` writes, and `tests/test_port_manifest.py` reads. Named
+#: rather than spelled twice, because the two sides drifting is the one thing that would
+#: make the reverse check silently stop finding anything.
+PORTED_FROM_ATTRIBUTE = "__bessemer_ported_from__"
+
+
+class Counterpart(NamedTuple):
+    """Where a ported test landed: the test module, and the name it goes by there."""
+
+    module: str
+    test: str
+
+
+class Entry(NamedTuple):
+    """One upstream test. `MANIFEST` maps upstream class name to a tuple of these."""
+
+    upstream_test: str
+    disposition: str
+    counterparts: tuple[Counterpart, ...]
+    reason: str
+
+
+def pending(upstream_test: str) -> Entry:
+    """Portable, not yet landed."""
+    return Entry(upstream_test, PENDING, (), "")
+
+
+def ported(upstream_test: str, counterpart: Counterpart) -> Entry:
+    """Landed whole, in one place."""
+    return Entry(upstream_test, PORTED, (counterpart,), "")
+
+
+def split(upstream_test: str, computation: Counterpart, rendering: Counterpart) -> Entry:
+    """Landed in two halves, computation first — decision 5 of the F2 README."""
+    return Entry(upstream_test, PORTED_SPLIT, (computation, rendering), "")
+
+
+def excluded(upstream_test: str, reason: str) -> Entry:
+    """Not coming, for the stated reason."""
+    return Entry(upstream_test, EXCLUDED, (), reason)
+
+
+def ported_from[F: Callable[..., object]](
+    upstream_class: str, upstream_test: str
+) -> Callable[[F], F]:
+    """Declare that this test is the counterpart of one upstream test.
+
+    The manifest names the counterpart and the counterpart names the entry back; the check
+    requires both. Applied to the two halves of a `PORTED_SPLIT` entry, both carry the same
+    upstream key and are told apart by the module they live in.
+
+    `setattr` rather than plain assignment because a function is not typed as carrying
+    arbitrary attributes, and the alternative is a cast that says less.
+    """
+
+    def mark(test: F) -> F:
+        setattr(test, PORTED_FROM_ATTRIBUTE, (upstream_class, upstream_test))
+        return test
+
+    return mark
+
+
+# ---------------------------------------------------------------------------------------
+# Exclusion reasons. One per upstream class, because the classes are excluded as units and
+# 132 copies of one sentence would be a worse artifact than eight specific ones.
+# ---------------------------------------------------------------------------------------
+
+_PICKER_SCOPE = (
+    "Decision 1 of the F2 README puts the interactive picker out of scope: it is a human "
+    "frontend for choosing what to dispatch, so it depends on dispatch existing and on a "
+    "ledger with real runs in it. Porting it now means porting a terminal UI against a "
+    "dispatcher that does not exist, and it would force a decision about shelling out to "
+    "gum — a runtime binary the zero-dependency posture has never had to consider. The "
+    "picker is a later feature with its own decision; bessemer is better without half of "
+    "it landing early against nothing."
+)
+
+PICKER_TASK_SOURCE = (
+    f"The picker's first step, choosing between a feature, a one-off spec and an ad-hoc "
+    f"prompt. {_PICKER_SCOPE}"
+)
+
+PICKER_ISSUES = (
+    f"The picker's issue-selection step, walking a feature's issues and their blocked-by "
+    f"graph in a terminal menu. {_PICKER_SCOPE}"
+)
+
+PICKER_BRANCH = (
+    f"The picker's branch step, offering existing working branches and the create-new "
+    f"path. {_PICKER_SCOPE}"
+)
+
+PICKER_BASE = (
+    f"The picker's base step, offering the ref a run's pull request targets. {_PICKER_SCOPE}"
+)
+
+PICKER_RESUME = (
+    f"The picker's resume step, which reads the ledger for branches worth resuming and so "
+    f"needs a ledger with real runs in it — something no bessemer install has yet. "
+    f"{_PICKER_SCOPE}"
+)
+
+PICKER_CMD = (
+    f"The picker's top-level command, wiring every step above together and dispatching the "
+    f"result. It is the one class that cannot be ported before any of the others. "
+    f"{_PICKER_SCOPE}"
+)
+
+PICKER_GUM = (
+    f"The gum wrappers themselves. Porting them is what decides that gum is a runtime "
+    f"binary bessemer shells out to, which is precisely the decision the picker's deferral "
+    f"exists to defer — and F5 may retire gum entirely in favour of a stdlib prompts "
+    f"module. {_PICKER_SCOPE}"
+)
+
+PICKER_SUMMARY_MENU = (
+    f"The picker's confirmation menu: it patches shutil.which for gum detection and "
+    f"asserts on the arguments handed to gum_choose, so it is picker scope by what it "
+    f"exercises rather than by what it is named. Decision 1 listed seven classes assembled "
+    f"by class name and missed this eighth one; the human extended the decision to it "
+    f"during issue 00, taking the picker exclusion to 132 tests rather than 127. "
+    f"{_PICKER_SCOPE}"
+)
+
+_MIGRATION_SCOPE = (
+    "Decision 4 of the F2 README drops _migrate_legacy_ledgers deliberately. The migration "
+    "is dead on arrival: bessemer has zero installs, so it can only ever run against files "
+    "it never created, so any test of it passes forever while proving nothing, and a suite "
+    "is better without green tests that cannot fail for a real reason. Note that gc is not "
+    "dropped with it — its scan and render are pure functions over rows and paths, testable "
+    "now against fixtures, and F3 needs them the day it lands."
+)
+
+MIGRATION_DEAD_ON_ARRIVAL = f"A direct test of the dropped function. {_MIGRATION_SCOPE}"
+
+MIGRATION_REACHED_INDIRECTLY = (
+    f"Not a test of the dropped function by name, but it writes a per-directory runs.jsonl "
+    f"and asserts the central file is created from it — which is _migrate_legacy_ledgers, "
+    f"one of the six sites tasklib.py calls it from. Left pending it would be unportable: "
+    f"issue 04 could only flip it by resurrecting the function decision 4 drops, against a "
+    f"tracer that requires zero pending. The general lesson, now in the F2 README: a "
+    f"deletion decision scoped by counting a function's own test class always undercounts "
+    f"it, because the scope is every test that reaches the behaviour. {_MIGRATION_SCOPE}"
+)
+
+
+# ---------------------------------------------------------------------------------------
+# The census. Order and grouping follow the upstream file; the counts that pin it are
+# hand-written in tests/test_port_manifest.py.
+# ---------------------------------------------------------------------------------------
+
+MANIFEST: dict[str, tuple[Entry, ...]] = {
+    "ParseIssueTests": (
+        pending("test_tolerant_parsing_and_multiple_blockers"),
+        pending("test_unknown_status_is_not_done"),
+        pending("test_missing_type_defaults_to_afk"),
+        pending("test_done_status_case_insensitive"),
+        pending("test_annotated_done_status_still_counts"),
+        pending("test_done_prefix_word_does_not_count"),
+    ),
+    "SelectIssuesTests": (
+        pending("test_default_selection_excludes_done_and_hitl"),
+        pending("test_dependency_order_respected"),
+        pending("test_explicit_blocker_violation_raises_before_any_selection"),
+        pending("test_explicit_selection_of_both_satisfies_blocker"),
+        pending("test_unknown_issues_reference_raises"),
+        pending("test_unresolvable_default_chain_is_left_out_not_an_error"),
+        pending("test_circular_blockers_raise"),
+        pending("test_list_all_includes_every_issue_regardless_of_status"),
+    ),
+    "LedgerTests": (
+        pending("test_append_writes_one_well_formed_line"),
+        pending("test_append_is_one_line_per_call"),
+        pending("test_last_base_for_branch_returns_most_recent"),
+        pending("test_last_base_for_unknown_branch_is_none"),
+        pending("test_missing_ledger_degrades_to_none"),
+        pending("test_corrupt_ledger_lines_are_skipped_not_fatal"),
+        pending("test_undecodable_ledger_degrades_to_none_not_fatal"),
+        pending("test_deleting_ledger_mid_feature_next_run_defaults_to_none"),
+        pending("test_append_ledger_write_failure_does_not_raise"),
+    ),
+    "CentralLedgerPathTests": (pending("test_is_tasks_dir_parent_slash_runs_jsonl"),),
+    "CmdLedgerAppendLastBaseTests": (
+        pending("test_cmd_ledger_append_parses_issue_flags"),
+        pending("test_cmd_ledger_append_rejects_malformed_issue_flag"),
+        pending("test_cmd_ledger_append_writes_to_central_file_not_task_dir"),
+        pending("test_cmd_ledger_last_base_reads_central_file"),
+        pending("test_cmd_ledger_last_base_ignores_task_dir_scoping"),
+        pending("test_cmd_ledger_last_base_no_record_prints_nothing"),
+    ),
+    "NewestRecordForBranchTests": (
+        pending("test_returns_most_recent_record_regardless_of_task_dir"),
+        pending("test_no_record_returns_none"),
+    ),
+    "RecentDistinctBranchesTests": (
+        pending("test_newest_first_deduped"),
+        pending("test_respects_limit"),
+        pending("test_empty_ledger_returns_empty"),
+    ),
+    "ResolveResumeTests": (
+        pending("test_feature_mode_task_dir_is_the_feature_folder"),
+        pending("test_spec_mode_reconstructs_full_spec_path"),
+        pending("test_feature_dir_deleted_from_disk_is_not_exists"),
+        pending("test_spec_file_individually_deleted_is_not_exists"),
+        pending("test_null_task_dir_from_a_prior_feedback_only_run_is_not_exists"),
+        pending(
+            "test_mode_recovers_from_a_feedback_only_run_that_carried_the_identity_forward",
+        ),
+        pending("test_branch_not_in_ledger_raises_with_recent_branches_hint"),
+        pending("test_empty_ledger_raises_with_no_hint"),
+        pending("test_identity_is_the_feature_basename_even_with_null_task_dir"),
+        pending("test_identity_is_the_spec_basename"),
+        pending("test_pr_url_is_carried_from_the_record"),
+        pending("test_pr_url_is_none_when_absent"),
+    ),
+    "ResumeDispatchActionTests": (
+        pending("test_normal_when_feature_has_runnable_issues"),
+        pending("test_normal_for_spec_mode_regardless_of_issue_count"),
+        pending("test_refuse_when_feature_selection_empty_and_no_feedback"),
+        pending("test_feedback_only_when_feature_selection_empty_and_feedback_given"),
+        pending("test_refuse_when_task_dir_missing_and_no_feedback"),
+        pending("test_feedback_only_when_task_dir_missing_and_feedback_given"),
+        pending("test_hard_error_when_task_dir_missing_and_issues_arg_given"),
+        pending("test_hard_error_beats_feedback_only_when_task_dir_missing"),
+    ),
+    "CmdResumeTests": (
+        pending("test_prints_recovered_fields_on_success"),
+        pending("test_exit_2_and_hint_on_stderr_when_branch_not_found"),
+    ),
+    "CmdResumeGuardTests": (
+        pending("test_prints_action_only_when_normal"),
+        pending("test_prints_message_when_refusing"),
+    ),
+    "ResolveLastTests": (
+        pending("test_returns_newest_record_overall_regardless_of_branch"),
+        pending("test_no_outcome_filtering_a_failed_run_can_be_newest"),
+        pending("test_empty_ledger_raises"),
+    ),
+    "CmdLastTests": (
+        pending("test_prints_newest_record_fields"),
+        pending("test_empty_ledger_exits_2_with_refusal_on_stderr"),
+    ),
+    "StripFeedbackEditTextTests": (
+        pending("test_strips_comment_lines_and_trims_blank_space"),
+        pending("test_only_leading_hash_counts_not_indented"),
+        pending("test_all_comments_and_blank_strips_to_empty"),
+        pending("test_preserves_literal_shell_metacharacters"),
+    ),
+    "CmdFeedbackEditStripTests": (pending("test_reads_stdin_strips_and_prints"),),
+    "MigrateLegacyLedgersTests": (
+        excluded("test_merges_and_stamps_task_dir_timestamp_sorted", MIGRATION_DEAD_ON_ARRIVAL),
+        excluded("test_original_files_left_untouched", MIGRATION_DEAD_ON_ARRIVAL),
+        excluded("test_no_legacy_files_no_op", MIGRATION_DEAD_ON_ARRIVAL),
+        excluded("test_missing_tasks_dir_no_op", MIGRATION_DEAD_ON_ARRIVAL),
+        excluded("test_corrupt_legacy_file_skipped_silently", MIGRATION_DEAD_ON_ARRIVAL),
+        excluded("test_already_migrated_is_a_no_op", MIGRATION_DEAD_ON_ARRIVAL),
+    ),
+    "ParseDockerRowsTests": (
+        pending("test_filters_to_agentbox_prefixed_containers"),
+        pending("test_skips_blank_lines"),
+        pending("test_row_with_no_status_field_is_tolerated"),
+        pending("test_empty_input_returns_empty"),
+    ),
+    "StaleLocksTests": (
+        pending("test_lock_with_no_matching_container_is_stale"),
+        pending("test_lock_with_matching_container_is_not_stale"),
+        pending("test_missing_locks_dir_returns_empty"),
+        pending("test_results_are_sorted"),
+    ),
+    "CollectRecentLedgerRecordsTests": (
+        pending("test_gathers_from_central_file_newest_first"),
+        pending("test_no_ledger_returns_empty"),
+        pending("test_corrupt_ledger_is_skipped_not_fatal"),
+        excluded(
+            "test_triggers_legacy_migration_when_central_file_missing",
+            MIGRATION_REACHED_INDIRECTLY,
+        ),
+    ),
+    "IssueSummaryTests": (
+        pending("test_formats_compact_marks"),
+        pending("test_empty_issues_is_dash"),
+        pending("test_sorted_numerically_not_lexically"),
+    ),
+    "OverallOutcomeTests": (
+        pending("test_one_off_approved_outcome"),
+        pending("test_one_off_needs_work_outcome"),
+        pending("test_feature_all_issues_approved"),
+        pending("test_feature_partial_approval"),
+        pending("test_no_outcome_or_issues_is_dash"),
+    ),
+    "AgeTests": (
+        pending("test_missing_timestamp_is_unknown"),
+        pending("test_malformed_timestamp_is_unknown"),
+        pending("test_recent_timestamp_is_seconds_ago"),
+        pending("test_minutes_ago"),
+        pending("test_hours_ago"),
+        pending("test_days_ago"),
+    ),
+    "FormatTableTests": (
+        pending("test_aligns_columns_and_leaves_last_unpadded"),
+        pending("test_truncates_only_marked_columns"),
+    ),
+    "RenderRunningTests": (
+        pending("test_docker_down_skips_containers_and_lock_check"),
+        pending("test_no_containers_says_so"),
+        pending("test_live_container_row_includes_branch_uptime_and_tail_command"),
+        pending("test_stale_lock_flagged_when_no_matching_container"),
+        pending("test_lock_with_live_container_not_flagged"),
+    ),
+    "RenderRecentTests": (
+        pending("test_no_records_says_so"),
+        pending("test_respects_limit"),
+        pending("test_row_includes_pr_url_unmodified"),
+        pending("test_missing_pr_url_shows_dash"),
+    ),
+    "RenderStatusTests": (
+        pending("test_empty_state_exits_cleanly_with_both_sections"),
+        pending("test_full_fixture_shows_running_and_recent_sections"),
+        pending("test_docker_down_still_renders_recent"),
+        excluded(
+            "test_renders_legacy_per_dir_ledgers_via_migration",
+            MIGRATION_REACHED_INDIRECTLY,
+        ),
+    ),
+    "CmdStatusTests": (
+        pending("test_reads_docker_rows_from_stdin"),
+        pending("test_docker_down_does_not_read_stdin"),
+        pending("test_exit_code_zero_on_empty_state"),
+    ),
+    "IsLiveStatusTests": (
+        pending("test_up_prefix_is_live"),
+        pending("test_exited_is_not_live"),
+        pending("test_created_is_not_live"),
+    ),
+    "PidAliveTests": (
+        pending("test_current_process_is_alive"),
+        pending("test_garbage_text_is_not_alive"),
+        pending("test_empty_text_is_not_alive"),
+        pending("test_dead_pid_is_not_alive"),
+        pending("test_permission_error_counts_as_alive"),
+    ),
+    "HumanSizeTests": (
+        pending("test_bytes"),
+        pending("test_kilobytes"),
+        pending("test_megabytes"),
+        pending("test_gigabytes"),
+    ),
+    "DirSizeTests": (
+        pending("test_sums_file_sizes_recursively"),
+        pending("test_missing_dir_is_zero"),
+    ),
+    "CollectGcItemsTests": (
+        pending("test_stopped_container_is_orphan_and_deletable"),
+        pending("test_running_container_is_excluded"),
+        pending("test_docker_down_excludes_containers_and_marks_undeletable"),
+        pending("test_checkout_with_no_live_container_is_orphan"),
+        pending("test_checkout_with_live_container_is_excluded"),
+        pending("test_checkout_with_live_lock_pid_is_excluded"),
+        pending("test_checkout_with_dead_lock_pid_is_still_orphan"),
+        pending("test_lock_with_dead_pid_and_no_container_is_orphan"),
+        pending("test_lock_with_live_pid_is_not_stale"),
+        pending("test_lock_with_live_container_excluded_even_if_pid_dead"),
+        pending("test_logs_are_never_items"),
+    ),
+    "SummarizeLogsTests": (
+        pending("test_counts_current_and_rotated_with_total_size"),
+        pending("test_no_rotated_omits_rotated_count"),
+        pending("test_empty_or_missing_dir_is_empty_string"),
+    ),
+    "RenderGcTests": (
+        pending("test_empty_items_nothing_to_reclaim"),
+        pending("test_log_summary_appended_with_and_without_items"),
+        pending("test_docker_down_adds_warning_header"),
+        pending("test_lists_item_fields"),
+    ),
+    "RenderGcPlanTests": (
+        pending("test_only_deletable_items_included"),
+        pending("test_empty_items_gives_empty_plan"),
+    ),
+    "CmdGcTests": (
+        pending("test_reads_docker_rows_from_stdin"),
+        pending("test_docker_down_does_not_read_stdin"),
+        pending("test_plan_flag_prints_tsv"),
+        pending("test_plan_flag_prints_nothing_when_empty"),
+    ),
+    "SetStatusTests": (
+        pending("test_replaces_existing_status_line_in_place"),
+        pending("test_inserts_status_line_when_absent"),
+    ),
+    "IsProtectedTests": (
+        pending("test_master_and_main_are_protected"),
+        pending("test_other_branches_are_not_protected"),
+    ),
+    "SlugifyTests": (
+        pending("test_takes_first_words_lowercased"),
+        pending("test_strips_punctuation"),
+        pending("test_empty_text_falls_back_to_task"),
+    ),
+    "MaterializeAdHocTests": (
+        pending("test_creates_file_under_ad_hoc_with_timestamp_and_branch"),
+        pending("test_filename_follows_branch_not_prompt_text"),
+        pending("test_returned_path_contains_a_slash"),
+    ),
+    "ResolveSpecTests": (
+        pending("test_bare_name_resolves_under_tasks_dir_with_md_appended"),
+        pending("test_bare_name_with_md_suffix_is_not_doubled"),
+        pending("test_path_with_slash_used_as_is"),
+        pending("test_path_with_slash_and_no_md_suffix_still_gets_md_appended"),
+        pending("test_task_dir_for_feature_is_tasks_dir_slash_feature"),
+        pending("test_task_dir_for_bare_spec_is_tasks_dir"),
+        pending("test_task_dir_for_path_spec_is_its_parent"),
+        pending("test_task_dir_for_pending_ad_hoc_prompt_is_ad_hoc_dir"),
+    ),
+    "BranchNameSuggestionTests": (
+        pending("test_feature_mode_uses_feature_folder_name"),
+        pending("test_one_off_spec_uses_basename_sans_md"),
+        pending("test_one_off_spec_bare_name_without_md_suffix_unchanged"),
+        pending("test_one_off_prompt_uses_slug_of_first_line"),
+        pending("test_feature_takes_priority_over_spec_or_prompt_text"),
+    ),
+    "FirstFreeBranchNameTests": (
+        pending("test_free_suggestion_returned_as_is"),
+        pending("test_local_collision_suffixes"),
+        pending("test_remote_collision_suffixes"),
+        pending("test_skips_past_multiple_taken_suffixes"),
+    ),
+    "LedgerBranchHelpersTests": (
+        pending("test_branch_order_is_most_recent_first_deduped"),
+        pending("test_branch_order_scoped_to_task_dir_ignores_other_dirs"),
+        pending("test_annotate_branch_includes_base_issues_and_pr"),
+        pending("test_annotate_branch_with_no_ledger_record_returns_bare_name"),
+        pending("test_annotate_branch_ignores_same_branch_in_other_task_dir"),
+    ),
+    "PickIssuesTests": (
+        excluded("test_auto_skips_prompt_when_one_issue", PICKER_ISSUES),
+        excluded("test_prompts_and_returns_raw_selection_when_multiple_issues", PICKER_ISSUES),
+        excluded("test_gum_individual_toggle_wins_over_preselected_all", PICKER_ISSUES),
+        excluded("test_gum_all_alone_defers_to_default", PICKER_ISSUES),
+        excluded("test_gum_all_entry_is_preselected", PICKER_ISSUES),
+        excluded("test_all_entry_label_reflects_done_state_and_ready_count", PICKER_ISSUES),
+        excluded("test_no_all_entry_when_fewer_than_two_ready", PICKER_ISSUES),
+        excluded("test_blank_response_defers_to_default_selection", PICKER_ISSUES),
+        excluded("test_gum_multi_select_matches_fallback_result", PICKER_ISSUES),
+        excluded("test_gum_empty_selection_defers_to_default", PICKER_ISSUES),
+    ),
+    "ResumeRunLabelTests": (
+        pending("test_feature_run_with_recorded_outcome"),
+        pending("test_spec_run_falls_back_to_pr_open_when_no_outcome_recorded"),
+        pending("test_falls_back_to_no_pr_yet_when_neither_outcome_nor_pr_recorded"),
+    ),
+    "LatestPerBranchTests": (
+        pending("test_keeps_only_the_first_record_seen_per_branch"),
+        pending("test_caps_at_limit"),
+        pending("test_skips_records_with_missing_or_non_string_branch"),
+    ),
+    "ResumeIssueCountTests": (
+        pending("test_spec_mode_is_always_zero"),
+        pending("test_missing_task_dir_is_zero"),
+        pending("test_feature_mode_counts_ready_issues"),
+        pending("test_select_issues_error_counts_as_one_not_zero"),
+    ),
+    "PickResumeTests": (
+        excluded("test_empty_ledger_explains_and_raises_pickback", PICKER_RESUME),
+        excluded("test_back_entry_raises_pickback", PICKER_RESUME),
+        excluded("test_abort_entry_raises_pickabort", PICKER_RESUME),
+        excluded("test_normal_branch_blank_feedback_returns_no_feedback", PICKER_RESUME),
+        excluded("test_normal_branch_typed_feedback_returned", PICKER_RESUME),
+        excluded("test_zero_runnable_issues_makes_feedback_mandatory", PICKER_RESUME),
+        excluded("test_gum_lists_records_and_returns_blank_feedback", PICKER_RESUME),
+        excluded("test_gum_back_entry_raises_pickback", PICKER_RESUME),
+        excluded("test_gum_abort_entry_raises_pickabort", PICKER_RESUME),
+        excluded("test_gum_zero_runnable_issues_loops_until_feedback_typed", PICKER_RESUME),
+    ),
+    "PickTaskSourceTests": (
+        excluded("test_selects_a_feature_folder_by_number", PICKER_TASK_SOURCE),
+        excluded(
+            "test_features_ordered_newest_first_with_alphabetical_tiebreak",
+            PICKER_TASK_SOURCE,
+        ),
+        excluded("test_features_listing_survives_broken_symlink", PICKER_TASK_SOURCE),
+        excluded("test_one_off_spec_path_must_exist", PICKER_TASK_SOURCE),
+        excluded("test_one_off_spec_path_reprompts_until_found", PICKER_TASK_SOURCE),
+        excluded(
+            "test_typed_prompt_returns_raw_text_without_materializing",
+            PICKER_TASK_SOURCE,
+        ),
+        excluded("test_selects_resume_and_delegates_to_pick_resume", PICKER_TASK_SOURCE),
+        excluded("test_resume_pickback_returns_to_top_menu", PICKER_TASK_SOURCE),
+        excluded("test_gum_selects_feature_by_label", PICKER_TASK_SOURCE),
+        excluded(
+            "test_gum_spec_path_uses_gum_input_and_matches_fallback_result",
+            PICKER_TASK_SOURCE,
+        ),
+        excluded(
+            "test_gum_typed_prompt_uses_gum_write_and_does_not_materialize",
+            PICKER_TASK_SOURCE,
+        ),
+        excluded("test_gum_selects_resume_and_delegates_to_pick_resume", PICKER_TASK_SOURCE),
+        excluded("test_gum_back_at_top_menu_propagates", PICKER_TASK_SOURCE),
+        excluded("test_gum_abort_at_top_menu_propagates", PICKER_TASK_SOURCE),
+        excluded("test_gum_explicit_back_entry_raises_pickback", PICKER_TASK_SOURCE),
+        excluded("test_gum_explicit_abort_entry_raises_pickabort", PICKER_TASK_SOURCE),
+        excluded("test_fallback_back_entry_raises_pickback", PICKER_TASK_SOURCE),
+        excluded("test_fallback_abort_entry_raises_pickabort", PICKER_TASK_SOURCE),
+        excluded(
+            "test_gum_ctrl_c_during_spec_subprompt_propagates_as_abort",
+            PICKER_TASK_SOURCE,
+        ),
+    ),
+    "PickBranchTests": (
+        excluded("test_selects_ledger_branch_by_number", PICKER_BRANCH),
+        excluded("test_typing_an_existing_branch_name_selects_it", PICKER_BRANCH),
+        excluded(
+            "test_new_branch_name_asks_confirm_and_creates_from_default_base",
+            PICKER_BRANCH,
+        ),
+        excluded("test_new_branch_declined_reprompts", PICKER_BRANCH),
+        excluded("test_protected_branch_is_refused_and_reprompts", PICKER_BRANCH),
+        excluded("test_checked_out_branch_is_refused_and_reprompts", PICKER_BRANCH),
+        excluded("test_top_menu_returncode_130_raises_pickabort", PICKER_BRANCH),
+        excluded("test_ledger_branches_pinned_to_top", PICKER_BRANCH),
+        excluded("test_other_fzf_path_uses_selected_line", PICKER_BRANCH),
+        excluded("test_other_fzf_unmatched_query_becomes_new_branch_candidate", PICKER_BRANCH),
+        excluded("test_gum_selects_existing_branch_and_matches_fallback_result", PICKER_BRANCH),
+        excluded("test_gum_new_branch_uses_gum_input_and_gum_confirm", PICKER_BRANCH),
+        excluded("test_gum_declined_confirm_reprompts", PICKER_BRANCH),
+        excluded("test_gum_back_at_top_menu_propagates_not_reprompts", PICKER_BRANCH),
+        excluded("test_gum_abort_at_top_menu_propagates", PICKER_BRANCH),
+        excluded("test_gum_explicit_back_entry_raises_pickback", PICKER_BRANCH),
+        excluded("test_gum_explicit_abort_entry_raises_pickabort", PICKER_BRANCH),
+        excluded("test_fallback_explicit_back_entry_raises_pickback", PICKER_BRANCH),
+        excluded("test_fallback_explicit_abort_entry_raises_pickabort", PICKER_BRANCH),
+        excluded("test_new_branch_name_subprompt_back_returns_to_branch_menu", PICKER_BRANCH),
+        excluded("test_new_branch_name_subprompt_abort_propagates", PICKER_BRANCH),
+        excluded("test_create_base_subprompt_back_returns_to_branch_menu", PICKER_BRANCH),
+        excluded("test_confirm_ctrl_c_propagates_as_abort_not_decline", PICKER_BRANCH),
+        excluded("test_gum_new_branch_prefills_free_suggestion", PICKER_BRANCH),
+        excluded("test_gum_no_suggestion_prefills_nothing", PICKER_BRANCH),
+        excluded("test_gum_local_collision_prefills_first_free_suffix", PICKER_BRANCH),
+        excluded("test_gum_remote_collision_also_prefills_a_suffix", PICKER_BRANCH),
+        excluded(
+            "test_fallback_new_branch_shows_suggestion_and_blank_accepts_it",
+            PICKER_BRANCH,
+        ),
+        excluded("test_fallback_new_branch_can_still_edit_freely", PICKER_BRANCH),
+    ),
+    "PickBaseTests": (
+        excluded("test_fzf_selection_wins", PICKER_BASE),
+        excluded("test_fzf_enter_on_empty_query_takes_default", PICKER_BASE),
+        excluded("test_fzf_typed_resolvable_query_accepted_without_list_match", PICKER_BASE),
+        excluded("test_fzf_130_raises_pickback", PICKER_BASE),
+        excluded("test_fzf_unresolvable_query_reprompts", PICKER_BASE),
+        excluded("test_blank_response_accepts_the_default", PICKER_BASE),
+        excluded("test_response_overrides_default", PICKER_BASE),
+        excluded("test_default_prefers_ledger_chain_over_passed_in_default", PICKER_BASE),
+        excluded("test_gum_blank_response_accepts_the_default", PICKER_BASE),
+        excluded("test_gum_response_overrides_default", PICKER_BASE),
+        excluded("test_gum_esc_raises_pickback", PICKER_BASE),
+        excluded("test_gum_ctrl_c_raises_pickabort", PICKER_BASE),
+    ),
+    "SummaryLinesTests": (
+        pending("test_feature_run_shows_source_issues_branch_base"),
+        pending("test_feature_run_default_issue_selection_shows_all_label"),
+        pending("test_one_off_spec_shows_spec_path_and_no_issues_line"),
+        pending("test_ad_hoc_prompt_shows_materialized_filename"),
+        pending("test_pending_ad_hoc_prompt_shows_first_line_not_yet_materialized"),
+        pending("test_created_branch_flow_shows_will_be_created_suffix"),
+    ),
+    "SummaryMenuTests": (
+        excluded("test_offers_edit_issues_and_edit_base_when_applicable", PICKER_SUMMARY_MENU),
+        excluded(
+            "test_omits_edit_issues_and_edit_base_when_not_applicable",
+            PICKER_SUMMARY_MENU,
+        ),
+        excluded(
+            "test_dispatch_edit_source_edit_branch_and_abort_always_offered",
+            PICKER_SUMMARY_MENU,
+        ),
+        excluded("test_omits_edit_branch_when_not_applicable", PICKER_SUMMARY_MENU),
+        excluded("test_gum_choose_receives_options_and_joined_header", PICKER_SUMMARY_MENU),
+    ),
+    "CmdPickTests": (
+        excluded("test_one_off_spec_dispatch_prints_resolved_lines", PICKER_CMD),
+        excluded("test_new_branch_base_is_pinned_to_the_confirmed_creation_base", PICKER_CMD),
+        excluded("test_feature_dispatch_with_multiple_issues_prints_selection", PICKER_CMD),
+        excluded("test_pickback_at_source_step_aborts", PICKER_CMD),
+        excluded("test_pickabort_at_source_step_aborts", PICKER_CMD),
+        excluded("test_keyboardinterrupt_at_any_step_aborts", PICKER_CMD),
+        excluded("test_back_from_issues_returns_to_source_and_reenters", PICKER_CMD),
+        excluded("test_back_from_branch_returns_to_issues_when_applicable", PICKER_CMD),
+        excluded(
+            "test_back_from_branch_returns_to_source_when_issues_step_skipped",
+            PICKER_CMD,
+        ),
+        excluded("test_back_from_base_returns_to_branch", PICKER_CMD),
+        excluded("test_pickabort_mid_wizard_aborts_immediately_not_a_step_back", PICKER_CMD),
+        excluded("test_create_branch_skips_base_step", PICKER_CMD),
+        excluded("test_edit_source_reruns_issues_branch_and_base", PICKER_CMD),
+        excluded(
+            "test_edit_source_to_a_source_without_issues_step_clears_stale_selection",
+            PICKER_CMD,
+        ),
+        excluded("test_edit_issues_returns_straight_to_summary", PICKER_CMD),
+        excluded("test_edit_branch_reruns_base_only", PICKER_CMD),
+        excluded("test_edit_branch_creating_new_branch_skips_base_rerun", PICKER_CMD),
+        excluded("test_edit_base_returns_straight_to_summary", PICKER_CMD),
+        excluded("test_abort_from_summary_exits_1_with_no_output", PICKER_CMD),
+        excluded("test_escape_on_summary_goes_back_into_last_real_step", PICKER_CMD),
+        excluded("test_escape_on_summary_after_created_branch_goes_back_to_branch", PICKER_CMD),
+        excluded("test_escape_walks_backward_continuously_from_summary", PICKER_CMD),
+        excluded("test_escape_from_summary_all_the_way_back_aborts", PICKER_CMD),
+        excluded(
+            "test_back_from_edited_step_cancels_just_that_edit_not_whole_picker",
+            PICKER_CMD,
+        ),
+        excluded(
+            "test_summary_menu_offers_only_applicable_edit_entries_for_created_branch",
+            PICKER_CMD,
+        ),
+        excluded("test_summary_menu_offers_issues_and_base_when_applicable", PICKER_CMD),
+        excluded(
+            "test_one_off_prompt_dispatch_materializes_file_named_after_branch",
+            PICKER_CMD,
+        ),
+        excluded("test_abort_after_typing_prompt_leaves_no_ad_hoc_file", PICKER_CMD),
+        excluded(
+            "test_resume_skips_issues_and_branch_steps_and_prints_feedback_file",
+            PICKER_CMD,
+        ),
+        excluded("test_resume_with_no_feedback_omits_feedback_file_line", PICKER_CMD),
+    ),
+    "GumHelpersTests": (
+        excluded("test_choose_constructs_args_with_header_and_options", PICKER_GUM),
+        excluded("test_choose_no_limit_adds_flag_and_returns_multiple_lines", PICKER_GUM),
+        excluded("test_choose_empty_multi_select_is_not_a_cancellation", PICKER_GUM),
+        excluded("test_choose_esc_exit_1_raises_pickback", PICKER_GUM),
+        excluded("test_choose_ctrl_c_exit_130_raises_pickabort", PICKER_GUM),
+        excluded("test_confirm_true_on_zero_exit", PICKER_GUM),
+        excluded("test_confirm_false_on_esc_exit_1", PICKER_GUM),
+        excluded("test_confirm_ctrl_c_exit_130_raises_pickabort", PICKER_GUM),
+        excluded("test_input_returns_stripped_stdout", PICKER_GUM),
+        excluded("test_input_value_adds_prefill_flag", PICKER_GUM),
+        excluded("test_input_no_value_omits_prefill_flag", PICKER_GUM),
+        excluded("test_input_esc_exit_1_raises_pickback", PICKER_GUM),
+        excluded("test_input_ctrl_c_exit_130_raises_pickabort", PICKER_GUM),
+        excluded("test_write_returns_stripped_stdout", PICKER_GUM),
+        excluded("test_write_esc_exit_1_raises_pickback", PICKER_GUM),
+        excluded("test_write_ctrl_c_exit_130_raises_pickabort", PICKER_GUM),
+        excluded("test_raise_gum_cancel_maps_130_to_abort_else_back", PICKER_GUM),
+    ),
+}

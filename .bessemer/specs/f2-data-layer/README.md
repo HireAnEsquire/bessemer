@@ -34,9 +34,18 @@ with a reason. Mutation still applies to code F2 writes that upstream did not ha
 Five, settled before any issue was written.
 
 1. **The interactive picker is out of scope.** `CmdPickTests`, `PickBranchTests`,
-   `PickTaskSourceTests`, `GumHelpersTests`, `PickBaseTests`, `PickResumeTests` and
-   `PickIssuesTests` are ~127 of the 337 tests — a human frontend for choosing what to
-   dispatch. It depends on dispatch existing and on a ledger with real runs in it, so
+   `PickTaskSourceTests`, `GumHelpersTests`, `PickBaseTests`, `PickResumeTests`,
+   `PickIssuesTests` and `SummaryMenuTests` are 132 of the 337 tests — a human frontend for
+   choosing what to dispatch.
+
+   **The rule is what the test exercises, not what its class is called.** `SummaryMenuTests`
+   was missed by the first draft of this list, which was assembled from class names: it
+   patches `shutil.which` for gum detection and asserts on `gum_choose` arguments, so it is
+   picker scope whatever its name suggests. Three in-scope classes — `SelectIssuesTests`,
+   `ResolveSpecTests`, `CmdLedgerAppendLastBaseTests` — match a naive search for `gum`,
+   `pick` or `which` only in *comment prose* ("unlike the picker's curated branch menu"),
+   and stay in scope. A search that cannot tell code from a comment is the wrong instrument
+   for this decision; read the class. It depends on dispatch existing and on a ledger with real runs in it, so
    porting it now means porting a terminal UI against a dispatcher that does not exist. It
    would also force a decision about shelling out to `gum`, a runtime binary the
    zero-dependency posture has never had to consider. Later feature, its own decision.
@@ -57,7 +66,18 @@ Five, settled before any issue was written.
 
 4. **`_migrate_legacy_ledgers` is deliberately dropped; gc is kept.** The migration is dead
    on arrival — bessemer has zero installs, so it can only ever run against files it never
-   created, and its six tests would pass forever while proving nothing. gc is different:
+   created, and its six tests would pass forever while proving nothing.
+
+   **Its blast radius is eight tests, not six.** Upstream calls the function from six sites,
+   and two further tests assert the behaviour through those callers rather than directly:
+   `CollectRecentLedgerRecordsTests.test_triggers_legacy_migration_when_central_file_missing`
+   and `RenderStatusTests.test_renders_legacy_per_dir_ledgers_via_migration`. Both write a
+   per-directory `runs.jsonl` and assert the central file is created from it. They are
+   excluded for the same reason and with the same reason recorded. Found in review: the
+   manifest had them `pending`, which is a state issue 04 could never have flipped without
+   resurrecting the dropped function, against a tracer that requires zero pending. A
+   deletion decision scoped by counting a function's own test class will always undercount
+   it; the scope is every test that reaches the behaviour. gc is different:
    its scan and render are pure functions over rows and paths, testable now against
    fixtures, and F3 needs them the day it lands.
 
@@ -68,22 +88,53 @@ Five, settled before any issue was written.
    ported-split with both destinations, so a test that loses its rendering half on the way
    is visible rather than merely gone.
 
+6. **Picker comments travel with the port, marked.** Two in-scope classes carry them:
+   `CmdLedgerAppendLastBaseTests` at upstream `test_tasklib.py:317` ("unlike the picker's
+   curated branch menu") and `ResolveSpecTests` at `:1637` ("the picker's existence check
+   must mirror that exactly").
+
+   An earlier draft said three, adding `SelectIssuesTests` — which carries no picker comment
+   at all. It matched on the English word *which* at `:119`. That is the third time the same
+   sloppy search produced a wrong scope in this feature, and it is why the rule below is
+   stated in terms of reading the class rather than searching it. Each states a real constraint the picker will have to satisfy and nothing
+   else records it, so deleting them loses a requirement; leaving them unmarked points a
+   reader at code that is not in the tree. Keep the text, add a clause naming the picker as
+   unported. **This is the porting issues' work, not the manifest's** — recorded here as a
+   numbered decision precisely because it would otherwise live only in issue 00 and a
+   transcript, and the sessions that must act on it read this file.
+
+   Only 3 of 199 test bodies were read closely when this was found, and the search that
+   found them cannot tell code from comment prose. Treat it as "nothing further surfaced".
+
 ## Sequence
 
 `00` blocks everything. The four port issues are independent of each other and share only
 the manifest.
 
-| Issue | Scope | Upstream tests |
-|---|---|---|
-| `00` | Port manifest | all 337, classified |
-| `01` | Issues: parse, select, topo order, status writes | ~38 |
-| `02` | Ledger: read, append, branch helpers, resolve-last | ~44 |
-| `03` | Resume: resolve, dispatch action, branch naming | ~42 |
-| `04` | Status and gc: scan, collect, render | ~81 |
+| Issue | Scope |
+|---|---|
+| `00` | Port manifest: all 337 upstream tests, classified |
+| `01` | Issues: parse, select, topo order, status writes |
+| `02` | Ledger: read, append, branch helpers, resolve-last |
+| `03` | Resume: resolve, dispatch action, branch naming |
+| `04` | Status and gc: scan, collect, render |
+
+**No per-issue test counts here, deliberately.** An earlier draft carried four — 38, 44,
+42, 81 — which sum to 205 against a portable remainder of 199. They were eyeballed from
+class names before the manifest existed, and no partition of the classes reproduces them,
+so an implementer trying to find the owning issue for a class would have been chasing
+numbers that never described anything. **The manifest is issue-agnostic**: it records what
+must land, and destinations arrive with the ports. Each port issue names the classes it
+owns, and the sum of those is 199 by construction rather than by assertion.
+
+Each port issue flips its own slice's manifest entries from `pending` to `ported` as part
+of its acceptance; an entry cannot be flipped without a counterpart test, so the flip is
+evidence rather than bookkeeping. The remaining `pending` count is F2's progress.
 
 ## Tracer
 
-`bessemer status` renders real state from a real ledger — not a fixture. That means a
+Zero `pending` entries remain in the manifest, and `bessemer status` renders real state
+from a real ledger — not a fixture. That means a
 ledger this repo actually wrote, which F2 cannot produce, since nothing dispatches until
 F3. The tracer therefore writes one by hand through the ported `append_ledger` and renders
 it, which is the honest version of the claim: the data layer round-trips.

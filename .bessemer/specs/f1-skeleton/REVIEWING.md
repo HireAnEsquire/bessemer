@@ -142,3 +142,21 @@ the format is exercised before anything depends on it.
 
 Finally: **anything the spec should have said but didn't.** The implementer is asked the same
 question; you see different gaps than it does.
+
+## How findings reach the implementer
+
+**The implementer never sees your review.** It sees only what the human relays, in a session
+that already holds its own work but nothing of yours. Whoever writes that relay — a human
+today, F3's dispatcher later — must make it self-contained:
+
+- **No finding numbers.** They index your document, which the implementer has not read.
+- **Anchor every item at `file:line` with the defect stated in full.** "Finding 3, fix it" is
+  an instruction to read a document that was never sent.
+- **Carry the measurement, not the conclusion.** The command and its output are what let the
+  implementer reproduce and know when it is fixed; "this is wrong" is not.
+- **Say which items block.** Your verdict names them; the relay must keep that mapping.
+
+Written down after it went wrong twice in F1 and F2. The failure is invisible from both
+ends — the reviewer sees a complete report, the implementer sees a coherent-looking
+instruction referring to something that does not exist — so nobody in the loop is positioned
+to notice it except the relay itself.
