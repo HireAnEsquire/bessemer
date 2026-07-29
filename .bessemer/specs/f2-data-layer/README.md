@@ -111,21 +111,25 @@ Five, settled before any issue was written.
 `00` blocks everything. The four port issues are independent of each other and share only
 the manifest.
 
-| Issue | Scope |
-|---|---|
-| `00` | Port manifest: all 337 upstream tests, classified |
-| `01` | Issues: parse, select, topo order, status writes |
-| `02` | Ledger: read, append, branch helpers, resolve-last |
-| `03` | Resume: resolve, dispatch action, branch naming |
-| `04` | Status and gc: scan, collect, render |
+| Issue | Scope | Classes | Tests | Blocked by |
+|---|---|---|---|---|
+| `00` | Port manifest: all 337 upstream tests, classified | 56 | 337 | — |
+| `01` | Issues: parse, select, spec resolution, status writes | 9 | 38 | 00 |
+| `02` | Ledger: read, append, branch helpers, resolve-last | 10 | 37 | 00 |
+| `03` | Resume: resolve, dispatch action, branch naming | 9 | 42 | 00, 02 |
+| `04` | Status: docker rows, locks, age, render | 12 | 50 | 00, 02 |
+| `05` | gc: scan, summarize, render a plan | 7 | 30 | 00, 02, 04 |
 
-**No per-issue test counts here, deliberately.** An earlier draft carried four — 38, 44,
-42, 81 — which sum to 205 against a portable remainder of 199. They were eyeballed from
-class names before the manifest existed, and no partition of the classes reproduces them,
-so an implementer trying to find the owning issue for a class would have been chasing
-numbers that never described anything. **The manifest is issue-agnostic**: it records what
-must land, and destinations arrive with the ports. Each port issue names the classes it
-owns, and the sum of those is 199 by construction rather than by assertion.
+**These counts are computed from the manifest, not eyeballed.** An earlier draft carried
+four — 38, 44, 42, 81 — summing to 205 against a portable remainder of 199, because they
+were guessed from class names before the manifest existed. The five sets above are disjoint,
+cover all 47 pending classes, and sum to exactly 197. That was verified by partitioning the
+manifest programmatically rather than by adding the column up, which is the same instrument
+failure this feature has now produced four times.
+
+`04` was one issue of 80 tests and 19 classes before the split — twice the size of anything
+F1 shipped. gc separates cleanly: it is a scan that returns a plan, and it needs `04`'s
+table and age helpers rather than the other way round.
 
 Each port issue flips its own slice's manifest entries from `pending` to `ported` as part
 of its acceptance; an entry cannot be flipped without a counterpart test, so the flip is
