@@ -1,6 +1,6 @@
 # 08 — Tracer: `uvx --from . bessemer doctor` green
 
-Status: Done — except CI, which cannot be evidenced until the work is pushed
+Status: Done
 Type: AFK
 Blocked by: 06, 07
 
