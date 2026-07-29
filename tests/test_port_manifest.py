@@ -178,6 +178,12 @@ WHOLLY_EXCLUDED_CLASSES = frozenset(
         # last_base_for_branch directly, so there is no split to make.
         "CmdLedgerAppendLastBaseTests",
         "CmdLastTests",
+        # Issue 03, same rule applied to the two resume subcommands: run.sh reads `resume`
+        # (run.sh:737) and `resume-guard` (run.sh:848) with `IFS='=' read -r`, and nothing
+        # else invokes either. `--resume` is a dispatch flag in bessemer, never a subcommand,
+        # so there is no half a human would type and no split to make.
+        "CmdResumeTests",
+        "CmdResumeGuardTests",
     }
 )
 
@@ -201,7 +207,7 @@ PARTIALLY_EXCLUDED_TESTS = frozenset(
     }
 )
 
-EXCLUDED_TEST_COUNT = 149
+EXCLUDED_TEST_COUNT = 153
 
 # What `unittest discover` collects: modules matching `test*.py`, methods prefixed `test`,
 # on `TestCase` subclasses. A counterpart recorded outside that set satisfies the binding

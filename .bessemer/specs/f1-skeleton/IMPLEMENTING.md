@@ -33,6 +33,13 @@ here is a spec bug worth fixing, not just a session to steer.
   defect found in F1 so far, by a wide margin: it has been shipped and caught seven times, in
   seven different modules, by implementers who were each being careful.
 - **From issue 02 onward, `make check` must pass before you report done.**
+- **When you mutate your own code to prove a test bites, mutate a copy — or remember that
+  `git checkout` cannot restore an untracked file.** Your issue's files are new and
+  uncommitted, so the reflex restore silently does nothing and the mutant survives into
+  your final `make check`. It has happened twice: issue 05's implementer shipped a
+  transcript with a polluted tree, and issue 03's caught it only because the suite went red.
+  Copy the tree to a scratch directory, or keep a byte-for-byte backup and diff after
+  restoring.
 - **Do not edit any file under `.bessemer/specs/`** — not even to tick an acceptance checkbox.
   Spec files are written host-side by a human; this mirrors the boundary the dispatcher enforces
   from F3.

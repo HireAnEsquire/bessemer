@@ -307,6 +307,44 @@ CMD_LAST_SHIM = (
     f"runs recorded yet'."
 )
 
+_RESUME_SHIM_SCOPE = (
+    "measured rather than argued: run.sh invokes it and nothing else does, and its output is "
+    "written for bash to parse with `IFS='=' read -r`. A python dispatcher calls "
+    "resolve_resume and resume_dispatch_action directly, so the subcommand crosses the "
+    "boundary the rewrite exists to delete, and porting it would add a user-facing CLI "
+    "surface for a flow nobody can reach until F3. Decision 5 of the F2 README: a cmd_* test "
+    "splits when a human would type the subcommand, and is excluded when the subcommand "
+    "exists so bash could reach python. --resume is a dispatch flag in bessemer, never a "
+    "subcommand of its own."
+)
+
+CMD_RESUME_SHIM = (
+    f"resume (run.sh:737) is a bash-to-python shim, {_RESUME_SHIM_SCOPE} Its two claims are "
+    f"dispositioned with the three dispositions the F2 README names. Covered elsewhere: the "
+    f"six recovered fields its tests asserted — mode, feature, spec, task_dir_exists, "
+    f"identity, pr_url — are asserted directly in ResolveResumeTests, ported whole, and so is "
+    f"the not-found refusal and its recent-branches hint. The seventh printed field, "
+    f"task_dir, upstream printed and never asserted anywhere, so no coverage existed to "
+    f"preserve; decision 9 of the F2 README records ResumeInfo.source_dir as F3's debt, and a "
+    f"data-layer test asserting it here would claim the wrong owner. Landed: the claim that a "
+    f"refused resolution yields no "
+    f"partial answer, as test_a_refused_resume_yields_no_partial_answer in "
+    f"tests/test_resume.py, unmarked, because no upstream test covers it separately. Asserted "
+    f"upstream and structurally unreachable here: the exit code 2, and the empty-string "
+    f"rendering of a null feature or spec. Both are properties of a key=value stdout contract "
+    f"that has no host once ResumeInfo is returned to a python caller."
+)
+
+CMD_RESUME_GUARD_SHIM = (
+    f"resume-guard (run.sh:848) is a bash-to-python shim, {_RESUME_SHIM_SCOPE} Covered "
+    f"elsewhere: both of its tests assert an action, and a message only when one is set — "
+    f"which is exactly what ResumeDispatchActionTests asserts against the function itself, "
+    f"all eight ported. Asserted upstream and structurally unreachable here: that the message "
+    f"line is omitted entirely for a normal action. resume_dispatch_action returns (action, "
+    f"None) and a python caller reads the None, so there is no line to omit, and no test here "
+    f"covers the omission."
+)
+
 MIGRATION_DEAD_ON_ARRIVAL = f"A direct test of the dropped function. {_MIGRATION_SCOPE}"
 
 MIGRATION_REACHED_INDIRECTLY = (
@@ -325,6 +363,7 @@ MIGRATION_REACHED_INDIRECTLY = (
 #: missing marker rather than about a misspelling.
 ISSUES = "tests.test_issues"
 LEDGER = "tests.test_ledger"
+RESUME = "tests.test_resume"
 
 
 # ---------------------------------------------------------------------------------------
@@ -485,38 +524,116 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "ResolveResumeTests": (
-        pending("test_feature_mode_task_dir_is_the_feature_folder"),
-        pending("test_spec_mode_reconstructs_full_spec_path"),
-        pending("test_feature_dir_deleted_from_disk_is_not_exists"),
-        pending("test_spec_file_individually_deleted_is_not_exists"),
-        pending("test_null_task_dir_from_a_prior_feedback_only_run_is_not_exists"),
-        pending(
-            "test_mode_recovers_from_a_feedback_only_run_that_carried_the_identity_forward",
+        ported(
+            "test_feature_mode_task_dir_is_the_feature_folder",
+            Counterpart(RESUME, "test_a_feature_runs_source_directory_is_the_feature_folder"),
         ),
-        pending("test_branch_not_in_ledger_raises_with_recent_branches_hint"),
-        pending("test_empty_ledger_raises_with_no_hint"),
-        pending("test_identity_is_the_feature_basename_even_with_null_task_dir"),
-        pending("test_identity_is_the_spec_basename"),
-        pending("test_pr_url_is_carried_from_the_record"),
-        pending("test_pr_url_is_none_when_absent"),
+        ported(
+            "test_spec_mode_reconstructs_full_spec_path",
+            Counterpart(RESUME, "test_a_spec_runs_full_path_is_rebuilt_from_the_record"),
+        ),
+        ported(
+            "test_feature_dir_deleted_from_disk_is_not_exists",
+            Counterpart(RESUME, "test_a_feature_folder_deleted_from_disk_no_longer_exists"),
+        ),
+        ported(
+            "test_spec_file_individually_deleted_is_not_exists",
+            Counterpart(RESUME, "test_a_spec_file_deleted_on_its_own_no_longer_exists"),
+        ),
+        ported(
+            "test_null_task_dir_from_a_prior_feedback_only_run_is_not_exists",
+            Counterpart(
+                RESUME, "test_a_null_source_from_an_earlier_feedback_only_run_does_not_exist"
+            ),
+        ),
+        ported(
+            "test_mode_recovers_from_a_feedback_only_run_that_carried_the_identity_forward",
+            Counterpart(
+                RESUME,
+                "test_mode_survives_a_feedback_only_run_that_carried_the_identity_forward",
+            ),
+        ),
+        ported(
+            "test_branch_not_in_ledger_raises_with_recent_branches_hint",
+            Counterpart(
+                RESUME, "test_a_branch_the_ledger_never_saw_refuses_and_lists_the_ones_it_did"
+            ),
+        ),
+        ported(
+            "test_empty_ledger_raises_with_no_hint",
+            Counterpart(RESUME, "test_an_empty_ledger_refuses_with_nothing_to_suggest"),
+        ),
+        ported(
+            "test_identity_is_the_feature_basename_even_with_null_task_dir",
+            Counterpart(
+                RESUME, "test_identity_is_the_feature_basename_even_with_no_source_recorded"
+            ),
+        ),
+        ported(
+            "test_identity_is_the_spec_basename",
+            Counterpart(RESUME, "test_identity_is_the_spec_basename"),
+        ),
+        ported(
+            "test_pr_url_is_carried_from_the_record",
+            Counterpart(RESUME, "test_the_pull_request_is_carried_out_of_the_record"),
+        ),
+        ported(
+            "test_pr_url_is_none_when_absent",
+            Counterpart(RESUME, "test_a_record_with_no_pull_request_carries_none"),
+        ),
     ),
     "ResumeDispatchActionTests": (
-        pending("test_normal_when_feature_has_runnable_issues"),
-        pending("test_normal_for_spec_mode_regardless_of_issue_count"),
-        pending("test_refuse_when_feature_selection_empty_and_no_feedback"),
-        pending("test_feedback_only_when_feature_selection_empty_and_feedback_given"),
-        pending("test_refuse_when_task_dir_missing_and_no_feedback"),
-        pending("test_feedback_only_when_task_dir_missing_and_feedback_given"),
-        pending("test_hard_error_when_task_dir_missing_and_issues_arg_given"),
-        pending("test_hard_error_beats_feedback_only_when_task_dir_missing"),
+        ported(
+            "test_normal_when_feature_has_runnable_issues",
+            Counterpart(RESUME, "test_a_feature_with_issues_left_to_run_continues_normally"),
+        ),
+        ported(
+            "test_normal_for_spec_mode_regardless_of_issue_count",
+            Counterpart(
+                RESUME, "test_a_spec_run_continues_normally_whatever_the_issue_count_says"
+            ),
+        ),
+        ported(
+            "test_refuse_when_feature_selection_empty_and_no_feedback",
+            Counterpart(
+                RESUME, "test_a_feature_with_nothing_to_run_and_no_feedback_is_refused"
+            ),
+        ),
+        ported(
+            "test_feedback_only_when_feature_selection_empty_and_feedback_given",
+            Counterpart(
+                RESUME,
+                "test_a_feature_with_nothing_to_run_but_feedback_given_runs_the_feedback",
+            ),
+        ),
+        ported(
+            "test_refuse_when_task_dir_missing_and_no_feedback",
+            Counterpart(RESUME, "test_a_gone_source_directory_with_no_feedback_is_refused"),
+        ),
+        ported(
+            "test_feedback_only_when_task_dir_missing_and_feedback_given",
+            Counterpart(RESUME, "test_a_gone_source_directory_with_feedback_runs_the_feedback"),
+        ),
+        ported(
+            "test_hard_error_when_task_dir_missing_and_issues_arg_given",
+            Counterpart(
+                RESUME, "test_naming_issues_against_a_gone_source_directory_is_a_hard_error"
+            ),
+        ),
+        ported(
+            "test_hard_error_beats_feedback_only_when_task_dir_missing",
+            Counterpart(
+                RESUME, "test_a_hard_error_beats_feedback_when_the_source_directory_is_gone"
+            ),
+        ),
     ),
     "CmdResumeTests": (
-        pending("test_prints_recovered_fields_on_success"),
-        pending("test_exit_2_and_hint_on_stderr_when_branch_not_found"),
+        excluded("test_prints_recovered_fields_on_success", CMD_RESUME_SHIM),
+        excluded("test_exit_2_and_hint_on_stderr_when_branch_not_found", CMD_RESUME_SHIM),
     ),
     "CmdResumeGuardTests": (
-        pending("test_prints_action_only_when_normal"),
-        pending("test_prints_message_when_refusing"),
+        excluded("test_prints_action_only_when_normal", CMD_RESUME_GUARD_SHIM),
+        excluded("test_prints_message_when_refusing", CMD_RESUME_GUARD_SHIM),
     ),
     "ResolveLastTests": (
         ported(
@@ -728,8 +845,14 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "IsProtectedTests": (
-        pending("test_master_and_main_are_protected"),
-        pending("test_other_branches_are_not_protected"),
+        ported(
+            "test_master_and_main_are_protected",
+            Counterpart(RESUME, "test_master_and_main_are_protected_whatever_the_case"),
+        ),
+        ported(
+            "test_other_branches_are_not_protected",
+            Counterpart(RESUME, "test_an_ordinary_branch_is_not_protected"),
+        ),
     ),
     "SlugifyTests": (
         ported(
@@ -804,17 +927,50 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "BranchNameSuggestionTests": (
-        pending("test_feature_mode_uses_feature_folder_name"),
-        pending("test_one_off_spec_uses_basename_sans_md"),
-        pending("test_one_off_spec_bare_name_without_md_suffix_unchanged"),
-        pending("test_one_off_prompt_uses_slug_of_first_line"),
-        pending("test_feature_takes_priority_over_spec_or_prompt_text"),
+        ported(
+            "test_feature_mode_uses_feature_folder_name",
+            Counterpart(RESUME, "test_a_feature_run_is_named_after_its_folder"),
+        ),
+        ported(
+            "test_one_off_spec_uses_basename_sans_md",
+            Counterpart(
+                RESUME, "test_a_one_off_spec_is_named_after_its_basename_without_the_suffix"
+            ),
+        ),
+        ported(
+            "test_one_off_spec_bare_name_without_md_suffix_unchanged",
+            Counterpart(RESUME, "test_a_spec_named_without_a_suffix_is_left_alone"),
+        ),
+        ported(
+            "test_one_off_prompt_uses_slug_of_first_line",
+            Counterpart(
+                RESUME, "test_a_typed_prompt_is_named_after_the_slug_of_its_first_line"
+            ),
+        ),
+        ported(
+            "test_feature_takes_priority_over_spec_or_prompt_text",
+            Counterpart(RESUME, "test_a_feature_wins_over_a_spec_and_over_typed_text"),
+        ),
     ),
     "FirstFreeBranchNameTests": (
-        pending("test_free_suggestion_returned_as_is"),
-        pending("test_local_collision_suffixes"),
-        pending("test_remote_collision_suffixes"),
-        pending("test_skips_past_multiple_taken_suffixes"),
+        ported(
+            "test_free_suggestion_returned_as_is",
+            Counterpart(RESUME, "test_a_free_suggestion_is_used_as_it_stands"),
+        ),
+        ported(
+            "test_local_collision_suffixes",
+            Counterpart(RESUME, "test_a_local_branch_of_that_name_forces_a_suffix"),
+        ),
+        ported(
+            "test_remote_collision_suffixes",
+            Counterpart(
+                RESUME, "test_a_branch_already_pushed_from_elsewhere_forces_a_suffix_too"
+            ),
+        ),
+        ported(
+            "test_skips_past_multiple_taken_suffixes",
+            Counterpart(RESUME, "test_taken_suffixes_are_skipped_until_one_is_free"),
+        ),
     ),
     "LedgerBranchHelpersTests": (
         ported(
@@ -876,10 +1032,22 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "ResumeIssueCountTests": (
-        pending("test_spec_mode_is_always_zero"),
-        pending("test_missing_task_dir_is_zero"),
-        pending("test_feature_mode_counts_ready_issues"),
-        pending("test_select_issues_error_counts_as_one_not_zero"),
+        ported(
+            "test_spec_mode_is_always_zero",
+            Counterpart(RESUME, "test_a_spec_run_always_counts_zero"),
+        ),
+        ported(
+            "test_missing_task_dir_is_zero",
+            Counterpart(RESUME, "test_a_gone_source_directory_counts_zero"),
+        ),
+        ported(
+            "test_feature_mode_counts_ready_issues",
+            Counterpart(RESUME, "test_a_feature_counts_the_issues_that_are_ready_to_run"),
+        ),
+        ported(
+            "test_select_issues_error_counts_as_one_not_zero",
+            Counterpart(RESUME, "test_a_selection_that_errors_counts_as_one_rather_than_zero"),
+        ),
     ),
     "PickResumeTests": (
         excluded("test_empty_ledger_explains_and_raises_pickback", PICKER_RESUME),

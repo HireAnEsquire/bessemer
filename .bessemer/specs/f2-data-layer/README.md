@@ -247,6 +247,23 @@ Five, settled before any issue was written.
        branch name, reads back as **zero records** — the ASCII line included. Not "a corrupt
        ledger reading as empty": total history loss from one byte in one line. Same class as
        defect 7.
+   13. **The resume menu and the resume itself can disagree about which record is newest.**
+       `resolve_resume` recovers through `newest_record_for_branch`, which is
+       `reversed(read_ledger(...))` — file order, on the convention that append order is
+       recency order. The menu that hands it a branch is built from
+       `collect_recent_ledger_records`, which *sorts by timestamp*. Nothing reconciles them,
+       so under a clock skew, a hand-edited ledger, or two hosts writing one file, the run the
+       human saw described and the run they resume are different records for the same branch.
+       This is defect 10's second face — the same file-order-versus-timestamp-order split,
+       reaching a decision the human made rather than only a `--base` default. Found in issue
+       03; the picker half is unported, so today only the ordering assumption ships.
+   14. **A ledger that cannot be decoded is indistinguishable from a branch that never ran.**
+       Defect 12 makes `read_ledger` return nothing for the whole file, so
+       `newest_record_for_branch` returns `None`, so `resolve_resume` raises
+       `no ledger record for branch '<b>' — recent branches in the ledger:\n  (none recorded)`
+       for a branch that has run many times. The message names the true cause of neither. Not
+       a new defect so much as defect 12's user-visible face, recorded here because it is the
+       one a human actually meets.
 
    **Concurrency, measured against the port source** — 8 processes, 480 records, APFS, line
    sizes from 130 B to 8 MB: no interleaving and no loss. `O_APPEND` makes each write's
@@ -265,6 +282,30 @@ Five, settled before any issue was written.
    against the suite that came with it** — every fix silently invalidates the oracle, and
    F1's whole record says the confident local improvement is where defects come from. They
    are recorded here so F3 and F4 meet them as known and dated, not as discoveries.
+
+9. **A git question inside a data-layer function becomes a parameter, and F3 owes the
+   answer.** F2's modules spawn no subprocess, which is not a style rule: it is what lets
+   their tests be pure and fast, and it is the seam ADR 0002 draws. Where a ported function
+   asked git something, the question is lifted into the signature rather than pulled down
+   into the module.
+
+   The case, from issue 03: upstream's `_first_free_branch_name(suggestion)` calls
+   `_branch_exists` and `_remote_branch_exists` internally. Bessemer's takes
+   `(suggestion, *, local_exists, remote_exists)`. **Two predicates, not one combined
+   `taken`** — collapsing them makes the local-collision and remote-collision tests the same
+   test, and upstream wrote both because a branch already pushed from elsewhere is as much a
+   collision as a local one.
+
+   So **F3's dispatch is the debtor here.** Every such parameter is a git call F3 must make
+   and pass in, and a default would be worse than the debt: it would let dispatch forget to
+   ask and get a plausible answer. When F3's issues are written, this list is what they have
+   to discharge.
+
+   A second entry on the debtor list, found by issue 03's review: **`ResumeInfo.source_dir`
+   has never been asserted by any test in either repo.** Upstream's `cmd_resume` prints
+   seven fields and its tests asserted six; the mutation `source_dir=""` at both
+   construction sites leaves bessemer's 44 resume tests green. F3's dispatch consumes it —
+   the F3 issue that does must land the assertion upstream never wrote.
 
 ## Sequence
 
