@@ -11,13 +11,60 @@ Each container gets its own throwaway database, so concurrent runs cannot collid
 or test databases. That per-run isolation is the reason this tool exists rather than a hosted
 alternative.
 
-## Status: under construction
+## Status: F1 (skeleton) complete
 
-Not yet installable. The tool has been running daily inside another repository for roughly two
-months and is being ported here as a standalone, pure-python rewrite.
+Still under construction — the tool has been running daily inside another repository for roughly
+two months and is being ported here as a standalone, pure-python rewrite. Adopter installation and
+onboarding arrive at F6; see [ROADMAP.md](ROADMAP.md) for the full sequence and what lands when.
 
-Current milestone: **F1 (skeleton)** — see [ROADMAP.md](ROADMAP.md) for the full sequence and what
-lands when. Adopter installation and onboarding arrive at F6.
+What F1 landed is one command that runs end to end, from a checkout of this repository:
+
+```
+uvx --refresh --from . bessemer doctor
+```
+
+Six checks — `uv`, `config`, `git-env`, `root`, `base`, `docker` — each reporting `ok`, `WARN` or
+`FAIL`, with a hint on anything that needs fixing. Exit 0 only when every check is `ok` or `WARN`;
+a check that could not run because an earlier one failed counts as a failure. There is no `pip
+install` and no virtualenv to make: uv supplies the interpreter.
+
+Two things the F1 tracer measured, both of which will bite a reader who skips them:
+
+**`--refresh` is not optional while developing.** `uvx` caches the environment it builds for a
+local `--from` path under the package's declared name and version, and bessemer's version has been
+`0.1.0` for every commit so far. Without `--refresh`, edits are invisible in *both* directions —
+the cache will keep serving code you deleted and keep hiding code you added. During F1's tracer
+this printed nothing at all and exited 0, because the cached wheel was the one built back when
+`doctor` was still a stub. A green exit status from a stale artifact is the one failure a tool
+whose job is reporting must not have. Adopters never see it: their `--from` is `git+…@<sha>`, and
+a new SHA is a new cache key.
+
+**uv 0.9.0 or newer.** ADR 0001 takes `requires-python = ">=3.14"` to mean the host interpreter is
+not the adopter's problem, because uv fetches one. Measured, that holds only if the uv doing the
+fetching knows about a *stable* 3.14. uv 0.8.0 does not: the newest 3.14 it can offer is the
+`3.14.0b4` prerelease, which `>=3.14` excludes, so it downloads its own default (3.13.5) and then
+fails the resolve. Bisected: uv 0.8.0 offers `3.14.0b4`, uv 0.8.17 offers `3.14.0rc2`, uv 0.9.0 is
+the first offering a stable `3.14.0`.
+
+**Doctor's `uv` line WARNs below this floor**, naming the version you have and the version wanted.
+A warning rather than a failure, and the distinction is the whole point: an old uv installs
+bessemer perfectly well on a machine that *already* has a python 3.14, which is why you can be
+reading the warning at all. What it tells you is that the next machine — a colleague's, a fresh CI
+image, this one after its system python moves — will not be able to install it, and that the error
+when that happens will name *python* and read as bessemer demanding something exotic. The fix is
+`uv self update`. To check by hand:
+
+```
+uv python list --only-downloads | grep 3.14
+```
+
+Filter for `<download available>`: `uv python list` mixes downloadable builds with interpreters
+already on disk, and reading a system python as uv's offering is a mistake two readers made here
+independently.
+
+With a new enough uv this genuinely needs nothing else installed. Measured with `uv 0.12.0`, system
+interpreters excluded via `--python-preference only-managed` and the download directed into a
+scratch directory: uv fetched CPython 3.14.6 and the report came back green.
 
 ## Where the code is coming from
 

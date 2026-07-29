@@ -53,6 +53,7 @@ pinned by a test that reads it off a stand-in runner rather than by one that spa
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import takewhile
 from pathlib import Path
 from typing import Final, Protocol
 
@@ -92,6 +93,85 @@ Doctor is the command a user runs *because* something is broken.
 
 UV_ARGV: Final = ("uv", "--version")
 """What check 1 spawns. `--version` because the question is whether uv is there and runs."""
+
+UV_FLOOR: Final = (0, 9, 0)
+"""The oldest uv that can *fetch* a python this package will install under. Restated by hand
+in `tests/test_doctor.py`.
+
+**A floor bessemer states because nothing else can.** ADR 0001 originally took
+`requires-python = ">=3.14"` to settle the interpreter question — uv reads it and fetches an
+interpreter — and issue 06 declined a uv floor on exactly that reasoning. Issue 08's tracer
+measured it false: `requires-python` describes what the *package* needs, not what the
+*installer* can fetch. uv 0.8.x reads `>=3.14`, downloads its own default (3.13.5), and then
+fails the resolve, because the newest 3.14 it can offer is `cpython-3.14.0b4` — a prerelease,
+which `>=3.14` excludes. uv 0.9.0 is the first that offers a stable 3.14.
+
+**WARN, not FAIL, and the reason is not that FAIL is merely harsh — it is that FAIL is a claim
+this line refutes by existing.** `requires-python` is `>=3.14`, so a doctor that is running at
+all was installed under a satisfying interpreter: installation already succeeded. An old uv
+below this floor gets there whenever a stable 3.14 is *already on the machine* — measured on the
+host that built this check, where uv 0.8.0 installed and ran the very bessemer printing the
+line, against Homebrew's python 3.14.6. A FAIL saying "bessemer cannot be installed by this uv"
+is therefore false on every host that can read it.
+
+What is true names its condition: this uv cannot download a stable 3.14, so bessemer will not
+install on a machine that does not already have one. That is a warning about the *next* machine
+— a colleague's, a fresh CI image, this one after its system python moves — which is a fact
+about the machine that leaves bessemer working, which is exactly what WARN is for.
+
+*(Issue 08's criterion said "FAIL rather than WARN — nothing works below it". Corrected
+host-side after this check shipped the false version and the report quoted its own disproof.)*
+"""
+
+
+def _version_text(parts: Sequence[int]) -> str:
+    """A parsed version back as a string, for a message. `(0, 9, 0)` → `"0.9.0"`."""
+    return ".".join(str(part) for part in parts)
+
+
+@dataclass(frozen=True)
+class UvVersion:
+    """A parsed `uv --version`: what uv called itself, and what that compares as.
+
+    Both halves are kept because each is wrong for the other's job. `parts` is padded and
+    truncated so the comparison is numeric (see `_uv_version`), which makes it the wrong thing
+    to print — a uv that says `uv 0.8` would be quoted back "uv 0.8.0 is older than…", telling
+    the reader its version is a string it has never seen. `text` is uv's own spelling and is
+    only ever printed.
+    """
+
+    text: str
+    parts: tuple[int, ...]
+
+
+def _uv_version(stdout: str) -> UvVersion | None:
+    """The version out of `uv --version`, or `None` if that output held no readable one.
+
+    uv prints `uv 0.9.2 (0aa1e5d 2026-07-11)` — the name, the version, then a build the
+    format of which varies by installer (`(Homebrew 2025-07-17)` is another real one). Only
+    the second field is read, and only its leading digits per component, so a suffix like
+    `0.9.0rc1` compares as `(0, 9, 0)` rather than refusing to parse.
+
+    **Padded to three components so the comparison is numeric throughout.** `(0, 9)` sorts
+    below `(0, 9, 0)`, which would fail a `uv 0.9` that is exactly at the floor. The padding is
+    also what makes the tuple the right shape to compare: string comparison would put `0.10.0`
+    *below* `0.9.0`, which is the one mistake a version floor cannot afford to make, and
+    `tests/test_doctor.py` pins that direction specifically.
+
+    Returns `None` rather than raising or guessing, because a uv that changed its output format
+    is not a uv that is too old — see `_check_uv` for what that distinction prints.
+    """
+    fields = stdout.split()
+    if len(fields) < 2:
+        return None
+    parts: list[int] = []
+    for component in fields[1].split(".")[:3]:
+        digits = "".join(takewhile(str.isdigit, component))
+        if not digits:
+            return None
+        parts.append(int(digits))
+    return UvVersion(text=fields[1], parts=tuple(parts + [0] * (3 - len(parts))))
+
 
 DOCKER_ARGV: Final = ("docker", "info")
 """What check 6 spawns. `info` is the cheapest question only a live daemon can answer.
@@ -328,16 +408,26 @@ def _probe(
 
 
 def _check_uv(ctx: Context) -> CheckResult:
-    """uv is installed and runs, and this is the interpreter it fetched.
+    """uv is installed, new enough to install bessemer, and this is the interpreter it ran.
 
     First in the list because it is the thing that supplies everything else: ADR 0001's
     distribution decision is `uvx --from <pinned source> bessemer …`, so a machine without uv
     cannot run the pinned core at all, whatever else is healthy.
 
-    The interpreter is reported rather than checked. `requires-python` is what enforces the
-    floor — uv reads it and fetches an interpreter that satisfies it — so a version check here
-    would be a rule that can only fire when packaging metadata was already ignored. The
-    version is still worth printing: it is the first thing a bug report needs.
+    **uv's version is checked against `UV_FLOOR`; the interpreter's is not.** The two halves
+    look symmetrical and are not. `requires-python` really does enforce the interpreter floor,
+    at install time and with a better message than doctor could produce, so a check here could
+    only fire when packaging metadata had already been ignored. It does not enforce uv's own,
+    because it is a statement about the package rather than about the installer reading it —
+    see `UV_FLOOR` for what that costs an adopter who is below it. The interpreter version is
+    still printed: it is the first thing a bug report needs.
+
+    **The uv reported on is the one on `PATH`, which need not be the one that installed this
+    bessemer.** Measured: under `uvx uv@0.9.0 tool run …` the line reads `ok uv 0.9.0` while
+    the `PATH` uv is 0.8.0. That is the right subject anyway — the floor is advice about what
+    the developer's own `uvx …` invocations will be able to fetch tomorrow, and it is `PATH`'s
+    uv that runs those. It does mean the line is not a claim about this process's provenance,
+    and nothing here should be written as though it were.
     """
     probe = _probe(
         ctx,
@@ -357,6 +447,30 @@ def _check_uv(ctx: Context) -> CheckResult:
             f"`{' '.join(UV_ARGV)}` exited {probe.returncode}"
             f"{_saying(redact.detail(probe.stderr))}",
             hint="reinstall uv, then check that `uv --version` works in your shell",
+        )
+    found = _uv_version(probe.stdout)
+    if found is None:
+        return _warn(
+            UV,
+            f"`{' '.join(UV_ARGV)}` printed no version bessemer could read, so the uv "
+            f"{_version_text(UV_FLOOR)} or newer it needs is unchecked — running under "
+            f"python {interpreter}",
+            hint=(
+                f"run `{' '.join(UV_ARGV)}` yourself and check it reports "
+                f"{_version_text(UV_FLOOR)} or newer"
+            ),
+        )
+    if found.parts < UV_FLOOR:
+        return _warn(
+            UV,
+            f"uv {found.text} cannot download a stable python 3.14, so bessemer will not "
+            f"install on a machine that does not already have one — uv "
+            f"{_version_text(UV_FLOOR)} or newer can (running under python {interpreter})",
+            hint=(
+                "upgrade uv with `uv self update`, or through whatever installed it "
+                "(`brew upgrade uv`); this machine already has a python bessemer runs on, so "
+                "nothing here is broken — a machine without one would fail to install it"
+            ),
         )
     return _ok(UV, f"{probe.stdout.strip()}, running under python {interpreter}")
 

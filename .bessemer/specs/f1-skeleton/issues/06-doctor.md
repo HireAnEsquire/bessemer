@@ -131,6 +131,17 @@ doctor could produce. Doctor reports both versions and judges neither. Named bec
 and usable" reads as an invitation to invent a minimum, and a floor bessemer enforces in two
 places is two floors that can disagree.
 
+**Reversed by issue 08's tracer, for `uv` only.** The reasoning above is false as measured:
+`requires-python` describes what the package needs, not what the installer can fetch, and uv
+0.8.0 cannot download a stable 3.14 at all — its newest is `cpython-3.14.0b4`, which `>=3.14`
+excludes. An adopter on an old uv gets an unsatisfiable-resolve error naming *python*, which
+reads as bessemer requiring something exotic. **uv >= 0.9.0** is a genuine adoption
+constraint (ADR 0001, amended), enforced by nothing, and stating it is exactly doctor's job.
+The interpreter half stands: no floor is checked there, because that one really is
+`requires-python`'s. Left as a record rather than rewritten, because the argument was sound
+and the fact underneath it was not — and the same argument will be re-derived by the next
+person who reads "present and usable".
+
 ## Acceptance criteria
 
 - [ ] `bessemer doctor` prints one line per check and exits 0 when all pass

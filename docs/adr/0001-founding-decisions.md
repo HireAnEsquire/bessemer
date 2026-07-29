@@ -83,6 +83,30 @@ moment it will ever have. That question was pressure-tested rather than assumed 
   is not the adopter's problem — uv reads `requires-python` and fetches the interpreter itself,
   so the version is a language-feature choice, not an adoption constraint. A lower floor would
   buy nothing and cost syntax churn in the ported helper.
+  - *Amended in issue 08: the constraint moved rather than vanished — it is now a floor on
+    **uv**, not on python.* Measured, on the machine this was written on: uv 0.8.0 can download
+    no stable 3.14 at all. Its newest is `cpython-3.14.0b4`, and `>=3.14` excludes a
+    prerelease, so on a host with no 3.14 already installed the run fails with an
+    unsatisfiable-resolve error naming python — which reads as bessemer requiring something
+    exotic rather than as uv being eleven releases old. Bisected: `0.8.0` offers `3.14.0b4`,
+    `0.8.17` offers `3.14.0rc2`, **`0.9.0` is the first offering stable `3.14.0`**. So
+    **uv >= 0.9.0** is a real adoption constraint, and it is doctor's to state, because
+    `requires-python` cannot enforce it: it describes what the package needs, not what the
+    installer is capable of fetching. **Doctor states it as a warning, never a failure** — a
+    host below the floor that already has a 3.14 works perfectly, and since `requires-python`
+    means doctor only runs *under* 3.14, a below-floor failure would be contradicted by its
+    own output every time it appeared. The claim is about the next machine, not this one. The original claim is right in substance — the adopter
+    still installs no interpreter by hand — and wrong in the detail that mattered, which is
+    that "uv" is not one thing.
+
+    **The floor is coupled to `requires-python` by nothing, and will go stale silently.** It
+    is a fact about which interpreters uv's bundled index could fetch at one moment, not an
+    invariant. Move `requires-python` to 3.15 and the correct floor moves with it, while the
+    constant sits there staying green — a check that has quietly stopped checking, which is
+    the failure mode doctor exists to not have. No mechanism proposed here: whoever raises
+    `requires-python` re-derives the floor, and the method is written down beside the
+    constant. Recorded because the next person to touch that line will be doing it for an
+    unrelated reason.
 - **Stdlib-first is posture, not necessity.** uv makes dependencies mechanically free for
   adopters (one pyproject line, resolved and locked invisibly), so the remaining argument is
   supply-chain surface on a credential-adjacent tool that pushes code. Default is stdlib;

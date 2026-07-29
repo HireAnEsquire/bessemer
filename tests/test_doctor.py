@@ -539,6 +539,111 @@ class UvCheckTest(TempDirTest):
         self.assertNotIn("second line", report["uv"].message)
 
 
+class UvFloorTest(TempDirTest):
+    """The uv version floor, and the comparison that decides it.
+
+    Issue 06 declined this check; issue 08's tracer measured the reasoning false and reversed
+    it. The floor is restated by hand below, because an assertion reading `doctor.UV_FLOOR`
+    would move with it — lower the constant to `(0, 8, 0)` and a suite that read it would stay
+    green while doctor blessed a uv that cannot install bessemer at all.
+    """
+
+    FLOOR: Final = (0, 9, 0)
+
+    def uv_line(self, version: str) -> CheckResult:
+        answer = (0, f"uv {version} (0aa1e5d 2026-07-11)\n", "")
+        return by_name(doctor.run_checks(self.context(run=Spawns(uv=answer))))["uv"]
+
+    def test_the_floor_is_uv_0_9_0(self) -> None:
+        self.assertEqual(doctor.UV_FLOOR, self.FLOOR)
+
+    def test_below_the_floor_warns_naming_both_versions(self) -> None:
+        """The version found and the version wanted. Either alone leaves the reader to guess
+        which direction the mismatch runs."""
+        result = self.uv_line("0.8.0")
+        self.assertEqual(result.status, "WARN")
+        self.assertIn("0.8.0", result.message)
+        self.assertIn("0.9.0", result.message)
+        self.assertIn("uv self update", result.hint)
+
+    def test_below_the_floor_is_a_warn_not_a_fail(self) -> None:
+        """**The line must not claim bessemer cannot be installed by this uv.** That claim is
+        refuted by its own existence: `requires-python` is `>=3.14`, so a doctor that is
+        running was installed under a satisfying interpreter, and an old uv reaches here
+        whenever a stable 3.14 is already on disk. Measured on the host this check was written
+        on — uv 0.8.0 built and ran the bessemer that printed the line. It shipped as a FAIL
+        once; this is the assertion that stops it shipping as one again."""
+        self.assertTrue(self.uv_line("0.8.17").passed)
+
+    def test_below_the_floor_says_which_machine_would_actually_break(self) -> None:
+        """The true claim names its condition — a machine without a stable 3.14 already on
+        it. A message that omits the condition is the false one again in softer clothing."""
+        message = self.uv_line("0.8.0").message
+        self.assertIn("does not already have one", message)
+        self.assertNotIn("cannot be installed", message)
+
+    def test_exactly_the_floor_passes(self) -> None:
+        self.assertEqual(self.uv_line("0.9.0").status, "ok")
+
+    def test_0_10_0_is_above_0_9_0(self) -> None:
+        """The whole reason the comparison is on integer tuples: `"0.10.0" < "0.9.0"` is true
+        as strings, so a textual floor would reject every uv from 0.10 onward — every uv an
+        adopter is actually likely to have."""
+        self.assertEqual(self.uv_line("0.10.0").status, "ok")
+        self.assertEqual(self.uv_line("0.12.0").status, "ok")
+
+    def parts_of(self, stdout: str) -> tuple[int, ...] | None:
+        found = doctor._uv_version(stdout)
+        return None if found is None else found.parts
+
+    def test_the_versions_uv_really_prints_are_read_correctly(self) -> None:
+        """Real `uv --version` output, hand-copied from three installs. The build suffix
+        varies by installer, and it is the field after the version that has to be ignored."""
+        self.assertEqual(self.parts_of("uv 0.8.0 (Homebrew 2025-07-17)\n"), (0, 8, 0))
+        self.assertEqual(self.parts_of("uv 0.9.2 (0aa1e5d 2026-07-11)\n"), (0, 9, 2))
+        self.assertEqual(
+            self.parts_of("uv 0.12.0 (b88d7c5c4 2026-07-28 aarch64-apple-darwin)\n"),
+            (0, 12, 0),
+        )
+
+    def test_a_prerelease_suffix_reads_as_its_release(self) -> None:
+        self.assertEqual(self.parts_of("uv 0.9.0rc1 (abc 2026-01-01)\n"), (0, 9, 0))
+
+    def test_a_short_version_is_padded_rather_than_sorted_below_the_floor(self) -> None:
+        """`(0, 9)` sorts below `(0, 9, 0)`, which would fail a uv that is exactly at it."""
+        self.assertEqual(self.parts_of("uv 0.9 (abc 2026-01-01)\n"), (0, 9, 0))
+        self.assertEqual(self.uv_line("0.9").status, "ok")
+
+    def test_the_message_quotes_uvs_own_spelling_not_the_padded_one(self) -> None:
+        """A uv that says `0.8` must not be told "uv 0.8.0 is older than…" — that quotes it a
+        version string it has never printed. The padding exists for the comparison only."""
+        result = self.uv_line("0.8")
+        self.assertIn("uv 0.8 ", result.message)
+        self.assertNotIn("0.8.0", result.message)
+
+    def test_an_unreadable_version_warns_rather_than_failing(self) -> None:
+        """A uv that changed its output format is not a uv that is too old. WARN says the
+        floor went unchecked; a FAIL here would block a working machine on bessemer's own
+        parsing gap."""
+        for output in ("uv\n", "\n", "uv version-unknown (dev)\n"):
+            with self.subTest(output=output):
+                self.assertIsNone(self.parts_of(output))
+        result = by_name(doctor.run_checks(self.context(run=Spawns(uv=(0, "uv\n", "")))))["uv"]
+        self.assertEqual(result.status, "WARN")
+        self.assertIn("unchecked", result.message)
+        self.assertTrue(result.passed)
+
+    def test_the_unreadable_warning_does_not_echo_what_uv_printed(self) -> None:
+        """The one message in this check built from bessemer's own text only. `_probe`'s
+        timeout branch makes the same choice for the same reason: echoing here would be a
+        fifth redacting site, and `RedactionTest` counts four.
+        """
+        result = by_name(
+            doctor.run_checks(self.context(run=Spawns(uv=(0, "uv totally-bogus\n", ""))))
+        )["uv"]
+        self.assertNotIn("totally-bogus", result.message)
+
+
 class DockerCheckTest(TempDirTest):
     def test_daemon_responding_is_ok(self) -> None:
         report = by_name(doctor.run_checks(self.context()))

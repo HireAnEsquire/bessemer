@@ -47,6 +47,15 @@ here is a spec bug worth fixing, not just a session to steer.
   STOP and say so.** Do not resolve it silently. These decisions were grilled at length, so a
   conflict means either the spec is wrong or the reasoning is — and both are worth knowing.
 
+  **The hard case is not missing the evidence, it is producing it and filing it as a
+  curiosity.** Issue 08 shipped a check whose message read "bessemer cannot be installed by
+  this one", printed by a bessemer that uv had just installed and run. The implementer
+  measured that, quoted it in its own report as a virtue ("the check fires for real rather
+  than only against stubs"), and did not notice that the run refuted the line's content. So
+  the question to ask of your own report before sending it is not "did I verify this" but
+  **"does anything I measured contradict what the spec told me to write?"** — nobody else in
+  the loop can ask it, because nobody else ran the command.
+
 ## When done, report
 
 What you built, the verification output, and **anything the spec should have told you but
