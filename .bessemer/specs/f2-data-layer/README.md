@@ -81,8 +81,30 @@ Five, settled before any issue was written.
    its scan and render are pure functions over rows and paths, testable now against
    fixtures, and F3 needs them the day it lands.
 
-5. **`cmd_*` tests split at the boundary ADR 0002 moved.** Each typically asserts two
-   things: what was computed and what was printed. The computation half lands in the core
+5. **`cmd_*` tests split at the boundary ADR 0002 moved — unless the subcommand is a shim
+   across a boundary the rewrite deletes.**
+
+   Upstream's `run.sh` is bash, so every value it needed from python came back through a
+   subcommand invoked as a subprocess. Bessemer's dispatch is python and calls the function
+   directly, so a subcommand that exists *only* for run.sh to call has no counterpart here:
+   porting it ports the boundary the rewrite exists to remove, and adds a user-facing
+   surface for a flow nobody can reach.
+
+   The test to apply: **would a human ever type this?** If yes, it splits. If it exists so
+   bash could reach python, it is excluded with that reason.
+
+   First instance, found during issue 01: `CmdFeedbackEditStripTests` (1 test). Upstream's
+   `cmd_feedback_edit_strip` is three lines — read stdin, print, return 0 — invoked at
+   `run.sh:918`, and the computation it wraps already has its own class
+   (`StripFeedbackEditTextTests`, 4 tests, ported). So there was never a split to make: the
+   whole of that test is the shim. Excluded, taking exclusions to **141** and pending to
+   **196**.
+
+   Each remaining `cmd_*` class is judged the same way by its own issue. `status` and `gc`
+   are commands a human types. `ledger-last-base`, `info`, `select` are the ones to look at
+   hardest.
+
+   Each genuine split typically asserts two things: what was computed and what was printed. The computation half lands in the core
    module's tests unchanged; the rendering half becomes a CLI test against `bessemer/cli.py`,
    where F1 already has `render()` and `tests/test_cli.py`. The manifest records each as
    ported-split with both destinations, so a test that loses its rendering half on the way
@@ -103,8 +125,78 @@ Five, settled before any issue was written.
    numbered decision precisely because it would otherwise live only in issue 00 and a
    transcript, and the sessions that must act on it read this file.
 
+   **Comments, in either file.** This decision was written about test comments, and issue 01
+   promptly erased a *source* docstring constraint instead — upstream's
+   "never at the source step, so an aborted picker leaves no orphan file behind" became a
+   generic sentence with every picker reference removed, which is precisely the loss the
+   decision exists to prevent, in the file nobody was checking. The rule covers
+   `tasklib.py`'s docstrings as much as `test_tasklib.py`'s comments.
+
    Only 3 of 199 test bodies were read closely when this was found, and the search that
    found them cannot tell code from comment prose. Treat it as "nothing further surfaced".
+
+7. **Three porting rules, learned in issue 01 and binding on the rest.**
+
+   **Rename identifiers, never assertions.** `CONTEXT.md`'s vocabulary applies to names the
+   port introduces — `_resolve_task_dir` becomes `source_dir`, `tasks_dir` becomes
+   `specs_dir`. It does not apply to *behaviour*: `slugify("")` returns the literal
+   `"task"`, a word `CONTEXT.md` retires, and it ships that way because upstream asserts it
+   by name. Changing a value to satisfy vocabulary is changing what the code does, which is
+   the one thing a port must not do quietly.
+
+   **A helper another F2 issue needs is public.** Upstream's privacy conventions were
+   written for one 2325-line file; bessemer splits it across five modules, so
+   `issue_summary` and `slugify` are public because issues 03 and 04 call them. Decide by
+   who calls it, not by the leading underscore upstream happened to use — and say in your
+   report which ones you promoted, so the issue that consumes them is not guessing.
+
+   **Where there is no enumeration, invent none.** F1's rule that every list needs a
+   hand-written literal exists because a test derived from the list it checks cannot notice
+   the list shrinking. A module that owns no list needs no such pin, and manufacturing one
+   to satisfy the rule produces a check with nothing behind it. `bessemer/issues.py` owns
+   two single-value constants and that is the whole of it.
+
+8. **Upstream defects are ported, reported, and left.** Each is reproduced against the port,
+   not inferred. Numbered rather than counted, because the first draft of this decision said
+   "six" and listed four — an unnamed defect is exactly the discovery this list exists to
+   prevent.
+
+   1. `_leading_number` scans rather than anchors, so `Blocked by: 2026-07-22` parses as
+      blocker `2026`, and `--issues "v2"` selects issue 2.
+   2. **Duplicate issue numbers silently drop a file, and falsely open a blocker gate.**
+      `by_number = {i.number: i for i in all_issues}` — last file wins. With `01-alpha.md`
+      (Todo) and `01-zeta.md` (Done), `02-gamma.md`'s `Blocked by: 01` is judged satisfied by
+      the *surviving* 01, so 02 dispatches on top of work that never ran, and `--issues 01`
+      returns `01-zeta.md` with no error. `select_issues`' own docstring says an explicit
+      list is a human's instruction whose unsatisfied blocker is an error raised before any
+      container starts; ambiguity is the one case that design should refuse and does not.
+      **The worst of these, and the one F3 will meet first.**
+   3. `set_status` rewrites the whole file through `splitlines()`/`join`, so CRLF becomes LF
+      and trailing blank lines collapse — a status write silently reformats a file it did
+      not otherwise touch.
+   4. `set_status`' insert position is "after the first line", not "after the title".
+   5. `parse_issue`'s title heuristic breaks when a heading equals its own filename stem.
+   6. A branch name containing `/` crashes `materialize_ad_hoc` — `FileNotFoundError` on
+      `ad-hoc/T-feat/login.md`. Slashes in branch names are ordinary git, and `CONTEXT.md`
+      makes the working branch a run's identity.
+   7. `read_text`/`write_text` are called with no `encoding=`, so behaviour follows the
+      ambient locale: under `LC_ALL=C PYTHONUTF8=0`, `parse_issue` raises
+      `UnicodeDecodeError` on an ordinary UTF-8 issue file. `bessemer/config.py` treats this
+      as a first-class case with its own `except` clause; a module claiming "the same
+      posture as `bessemer.config`" must not diverge on it silently.
+   8. `materialize_ad_hoc` uses `datetime.now()`, so `TZ` changes the *date* in a filename
+      that is the run's identity. No test catches it because all three upstream tests pass
+      an explicit timestamp, never exercising the default branch.
+
+   Two claims deliberately **not** on this list, so nobody re-hunts them: `materialize_ad_hoc`
+   with a `../../` branch is not a path traversal (it fails like any other slashed branch),
+   and upstream's unparenthesised `except OSError, UnicodeDecodeError:` is not a syntax
+   error — PEP 758 made it legal in 3.14, which is bessemer's floor.
+
+   None were fixed, and that is correct. **A port that improves things cannot be verified
+   against the suite that came with it** — every fix silently invalidates the oracle, and
+   F1's whole record says the confident local improvement is where defects come from. They
+   are recorded here so F3 and F4 meet them as known and dated, not as discoveries.
 
 ## Sequence
 

@@ -152,6 +152,13 @@ UPSTREAM_CLASS_COUNTS = {
 # was added during issue 00, after it turned out to patch `shutil.which` and assert on
 # `gum_choose` arguments. Decision 1 now reads by what a class exercises, not by what it is
 # named, and the picker exclusion is 132 tests rather than 127.
+#
+# `CmdFeedbackEditStripTests` joined during issue 01, which had been told to land it as F2's
+# first `PORTED_SPLIT`. There is no computation half to split off: the computation has its
+# own class, `StripFeedbackEditTextTests`, and the command is a three-line shim that exists
+# only because the port source's `run.sh` is bash and had to spawn python to reach a
+# function. So the class is excluded whole and `PORTED_SPLIT` has still never fired on real
+# data — issue 02 or 04 settles it.
 WHOLLY_EXCLUDED_CLASSES = frozenset(
     {
         "PickTaskSourceTests",
@@ -163,6 +170,7 @@ WHOLLY_EXCLUDED_CLASSES = frozenset(
         "GumHelpersTests",
         "SummaryMenuTests",
         "MigrateLegacyLedgersTests",
+        "CmdFeedbackEditStripTests",
     }
 )
 
@@ -186,7 +194,7 @@ PARTIALLY_EXCLUDED_TESTS = frozenset(
     }
 )
 
-EXCLUDED_TEST_COUNT = 140
+EXCLUDED_TEST_COUNT = 141
 
 # What `unittest discover` collects: modules matching `test*.py`, methods prefixed `test`,
 # on `TestCase` subclasses. A counterpart recorded outside that set satisfies the binding

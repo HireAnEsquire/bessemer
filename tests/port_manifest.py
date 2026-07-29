@@ -54,11 +54,17 @@ census" reads as pinning more than it does, and this is the sentence that stops 
     CLI test against `bessemer/cli.py`. Both destinations are recorded, in that order, so
     a test that loses its rendering half on the way is visible rather than merely gone.
 
+    Not every `cmd_*` test splits. Decision 5 was refined during issue 01: a subcommand that
+    exists only because the port source's `run.sh` is bash and had to spawn python to reach
+    a function is excluded rather than split, because bessemer's dispatcher calls the
+    function directly. `CmdFeedbackEditStripTests` is the first such case, and it is why
+    this disposition has still never been used on real data.
+
 `EXCLUDED`
     Not coming, with a reason in prose that says why bessemer is better without it. Never
     a bare flag: an exclusion is reviewable only if the reason is committed beside it.
 
-    Exclusion is per test, not per class. Nine classes are excluded whole, but two tests
+    Exclusion is per test, not per class. Ten classes are excluded whole, but two tests
     in otherwise in-scope classes reach `_migrate_legacy_ledgers` without naming it, and
     decision 4 drops the behaviour rather than the function. `tests/test_port_manifest.py`
     enumerates those two by name rather than counting them, because a partial exclusion is
@@ -253,6 +259,18 @@ _MIGRATION_SCOPE = (
     "now against fixtures, and F3 needs them the day it lands."
 )
 
+SHIM_FOR_BASH = (
+    "The whole of cmd_feedback_edit_strip is a three-line shim — read stdin, print, return "
+    "0 — and the computation it wraps is already covered by StripFeedbackEditTextTests, "
+    "which is ported. The subcommand exists only because the port source's run.sh is bash "
+    "and had to spawn python to reach that function; bessemer's dispatcher is python and "
+    "calls strip_feedback_edit_text directly, so the subcommand crosses a boundary the "
+    "rewrite deletes. Porting it would add a user-facing CLI surface for a flow nobody can "
+    "reach until F3, which is the stub-is-a-claim rule F1 was built on. This refines "
+    "decision 5 of the F2 README: a cmd_* test splits when the subcommand is one a human "
+    "would type, and is excluded when the subcommand exists so bash could reach python."
+)
+
 MIGRATION_DEAD_ON_ARRIVAL = f"A direct test of the dropped function. {_MIGRATION_SCOPE}"
 
 MIGRATION_REACHED_INDIRECTLY = (
@@ -266,6 +284,12 @@ MIGRATION_REACHED_INDIRECTLY = (
 )
 
 
+#: Destination modules, spelled once. A counterpart's module is repeated across dozens of
+#: entries, and a typo in one of those repetitions is a failure whose message is about a
+#: missing marker rather than about a misspelling.
+ISSUES = "tests.test_issues"
+
+
 # ---------------------------------------------------------------------------------------
 # The census. Order and grouping follow the upstream file; the counts that pin it are
 # hand-written in tests/test_port_manifest.py.
@@ -273,22 +297,75 @@ MIGRATION_REACHED_INDIRECTLY = (
 
 MANIFEST: dict[str, tuple[Entry, ...]] = {
     "ParseIssueTests": (
-        pending("test_tolerant_parsing_and_multiple_blockers"),
-        pending("test_unknown_status_is_not_done"),
-        pending("test_missing_type_defaults_to_afk"),
-        pending("test_done_status_case_insensitive"),
-        pending("test_annotated_done_status_still_counts"),
-        pending("test_done_prefix_word_does_not_count"),
+        ported(
+            "test_tolerant_parsing_and_multiple_blockers",
+            Counterpart(
+                ISSUES, "test_a_header_parses_and_several_blockers_come_back_as_numbers"
+            ),
+        ),
+        ported(
+            "test_unknown_status_is_not_done",
+            Counterpart(ISSUES, "test_an_unknown_status_is_not_done"),
+        ),
+        ported(
+            "test_missing_type_defaults_to_afk",
+            Counterpart(ISSUES, "test_a_missing_type_defaults_to_afk"),
+        ),
+        ported(
+            "test_done_status_case_insensitive",
+            Counterpart(ISSUES, "test_done_is_recognised_whatever_its_case"),
+        ),
+        ported(
+            "test_annotated_done_status_still_counts",
+            Counterpart(ISSUES, "test_an_annotated_done_status_still_counts"),
+        ),
+        ported(
+            "test_done_prefix_word_does_not_count",
+            Counterpart(ISSUES, "test_a_longer_word_beginning_with_done_does_not_count"),
+        ),
     ),
     "SelectIssuesTests": (
-        pending("test_default_selection_excludes_done_and_hitl"),
-        pending("test_dependency_order_respected"),
-        pending("test_explicit_blocker_violation_raises_before_any_selection"),
-        pending("test_explicit_selection_of_both_satisfies_blocker"),
-        pending("test_unknown_issues_reference_raises"),
-        pending("test_unresolvable_default_chain_is_left_out_not_an_error"),
-        pending("test_circular_blockers_raise"),
-        pending("test_list_all_includes_every_issue_regardless_of_status"),
+        ported(
+            "test_default_selection_excludes_done_and_hitl",
+            Counterpart(ISSUES, "test_the_default_selection_excludes_done_and_hitl_issues"),
+        ),
+        ported(
+            "test_dependency_order_respected",
+            Counterpart(ISSUES, "test_the_selection_comes_back_in_dependency_order"),
+        ),
+        ported(
+            "test_explicit_blocker_violation_raises_before_any_selection",
+            Counterpart(ISSUES, "test_an_explicit_selection_that_violates_a_blocker_raises"),
+        ),
+        ported(
+            "test_explicit_selection_of_both_satisfies_blocker",
+            Counterpart(
+                ISSUES, "test_selecting_a_blocker_alongside_what_it_blocks_satisfies_it"
+            ),
+        ),
+        ported(
+            "test_unknown_issues_reference_raises",
+            Counterpart(
+                ISSUES, "test_an_explicit_reference_to_an_issue_that_does_not_exist_raises"
+            ),
+        ),
+        ported(
+            "test_unresolvable_default_chain_is_left_out_not_an_error",
+            Counterpart(
+                ISSUES,
+                "test_a_default_chain_that_cannot_resolve_is_left_out_rather_than_an_error",
+            ),
+        ),
+        ported(
+            "test_circular_blockers_raise",
+            Counterpart(ISSUES, "test_blockers_that_form_a_cycle_raise"),
+        ),
+        ported(
+            "test_list_all_includes_every_issue_regardless_of_status",
+            Counterpart(
+                ISSUES, "test_loading_a_directory_covers_every_issue_regardless_of_status"
+            ),
+        ),
     ),
     "LedgerTests": (
         pending("test_append_writes_one_well_formed_line"),
@@ -363,12 +440,28 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_empty_ledger_exits_2_with_refusal_on_stderr"),
     ),
     "StripFeedbackEditTextTests": (
-        pending("test_strips_comment_lines_and_trims_blank_space"),
-        pending("test_only_leading_hash_counts_not_indented"),
-        pending("test_all_comments_and_blank_strips_to_empty"),
-        pending("test_preserves_literal_shell_metacharacters"),
+        ported(
+            "test_strips_comment_lines_and_trims_blank_space",
+            Counterpart(ISSUES, "test_comment_lines_go_and_surrounding_blank_space_is_trimmed"),
+        ),
+        ported(
+            "test_only_leading_hash_counts_not_indented",
+            Counterpart(ISSUES, "test_only_a_hash_in_column_one_counts"),
+        ),
+        ported(
+            "test_all_comments_and_blank_strips_to_empty",
+            Counterpart(
+                ISSUES, "test_a_file_of_nothing_but_comments_and_blanks_strips_to_empty"
+            ),
+        ),
+        ported(
+            "test_preserves_literal_shell_metacharacters",
+            Counterpart(ISSUES, "test_shell_metacharacters_survive_as_literal_text"),
+        ),
     ),
-    "CmdFeedbackEditStripTests": (pending("test_reads_stdin_strips_and_prints"),),
+    "CmdFeedbackEditStripTests": (
+        excluded("test_reads_stdin_strips_and_prints", SHIM_FOR_BASH),
+    ),
     "MigrateLegacyLedgersTests": (
         excluded("test_merges_and_stamps_task_dir_timestamp_sorted", MIGRATION_DEAD_ON_ARRIVAL),
         excluded("test_original_files_left_untouched", MIGRATION_DEAD_ON_ARRIVAL),
@@ -399,9 +492,18 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "IssueSummaryTests": (
-        pending("test_formats_compact_marks"),
-        pending("test_empty_issues_is_dash"),
-        pending("test_sorted_numerically_not_lexically"),
+        ported(
+            "test_formats_compact_marks",
+            Counterpart(ISSUES, "test_verdicts_render_as_compact_marks"),
+        ),
+        ported(
+            "test_empty_issues_is_dash",
+            Counterpart(ISSUES, "test_no_issues_renders_as_a_dash"),
+        ),
+        ported(
+            "test_sorted_numerically_not_lexically",
+            Counterpart(ISSUES, "test_the_marks_sort_numerically_rather_than_lexically"),
+        ),
     ),
     "OverallOutcomeTests": (
         pending("test_one_off_approved_outcome"),
@@ -506,32 +608,90 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         pending("test_plan_flag_prints_nothing_when_empty"),
     ),
     "SetStatusTests": (
-        pending("test_replaces_existing_status_line_in_place"),
-        pending("test_inserts_status_line_when_absent"),
+        ported(
+            "test_replaces_existing_status_line_in_place",
+            Counterpart(ISSUES, "test_an_existing_status_line_is_replaced_in_place"),
+        ),
+        ported(
+            "test_inserts_status_line_when_absent",
+            Counterpart(ISSUES, "test_a_status_line_is_inserted_when_the_file_has_none"),
+        ),
     ),
     "IsProtectedTests": (
         pending("test_master_and_main_are_protected"),
         pending("test_other_branches_are_not_protected"),
     ),
     "SlugifyTests": (
-        pending("test_takes_first_words_lowercased"),
-        pending("test_strips_punctuation"),
-        pending("test_empty_text_falls_back_to_task"),
+        ported(
+            "test_takes_first_words_lowercased",
+            Counterpart(ISSUES, "test_the_first_words_are_taken_and_lowercased"),
+        ),
+        ported(
+            "test_strips_punctuation",
+            Counterpart(ISSUES, "test_punctuation_separates_rather_than_survives"),
+        ),
+        ported(
+            "test_empty_text_falls_back_to_task",
+            Counterpart(ISSUES, "test_empty_text_falls_back_to_the_literal_task"),
+        ),
     ),
     "MaterializeAdHocTests": (
-        pending("test_creates_file_under_ad_hoc_with_timestamp_and_branch"),
-        pending("test_filename_follows_branch_not_prompt_text"),
-        pending("test_returned_path_contains_a_slash"),
+        ported(
+            "test_creates_file_under_ad_hoc_with_timestamp_and_branch",
+            Counterpart(
+                ISSUES, "test_the_file_lands_under_ad_hoc_named_by_timestamp_and_branch"
+            ),
+        ),
+        ported(
+            "test_filename_follows_branch_not_prompt_text",
+            Counterpart(ISSUES, "test_the_filename_follows_the_branch_not_the_prompt_text"),
+        ),
+        ported(
+            "test_returned_path_contains_a_slash",
+            Counterpart(ISSUES, "test_the_returned_path_contains_a_slash"),
+        ),
     ),
     "ResolveSpecTests": (
-        pending("test_bare_name_resolves_under_tasks_dir_with_md_appended"),
-        pending("test_bare_name_with_md_suffix_is_not_doubled"),
-        pending("test_path_with_slash_used_as_is"),
-        pending("test_path_with_slash_and_no_md_suffix_still_gets_md_appended"),
-        pending("test_task_dir_for_feature_is_tasks_dir_slash_feature"),
-        pending("test_task_dir_for_bare_spec_is_tasks_dir"),
-        pending("test_task_dir_for_path_spec_is_its_parent"),
-        pending("test_task_dir_for_pending_ad_hoc_prompt_is_ad_hoc_dir"),
+        ported(
+            "test_bare_name_resolves_under_tasks_dir_with_md_appended",
+            Counterpart(
+                ISSUES, "test_a_bare_name_resolves_under_the_specs_dir_with_md_appended"
+            ),
+        ),
+        ported(
+            "test_bare_name_with_md_suffix_is_not_doubled",
+            Counterpart(ISSUES, "test_a_bare_name_that_already_ends_in_md_is_not_doubled"),
+        ),
+        ported(
+            "test_path_with_slash_used_as_is",
+            Counterpart(ISSUES, "test_a_path_with_a_slash_is_used_as_it_stands"),
+        ),
+        ported(
+            "test_path_with_slash_and_no_md_suffix_still_gets_md_appended",
+            Counterpart(
+                ISSUES, "test_a_path_with_a_slash_and_no_md_suffix_still_gets_md_appended"
+            ),
+        ),
+        ported(
+            "test_task_dir_for_feature_is_tasks_dir_slash_feature",
+            Counterpart(
+                ISSUES, "test_the_source_dir_for_a_feature_is_the_specs_dir_plus_its_name"
+            ),
+        ),
+        ported(
+            "test_task_dir_for_bare_spec_is_tasks_dir",
+            Counterpart(ISSUES, "test_the_source_dir_for_a_bare_spec_is_the_specs_dir_itself"),
+        ),
+        ported(
+            "test_task_dir_for_path_spec_is_its_parent",
+            Counterpart(ISSUES, "test_the_source_dir_for_a_path_spec_is_that_paths_parent"),
+        ),
+        ported(
+            "test_task_dir_for_pending_ad_hoc_prompt_is_ad_hoc_dir",
+            Counterpart(
+                ISSUES, "test_the_source_dir_for_a_pending_ad_hoc_prompt_is_the_ad_hoc_dir"
+            ),
+        ),
     ),
     "BranchNameSuggestionTests": (
         pending("test_feature_mode_uses_feature_folder_name"),
