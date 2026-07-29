@@ -1,6 +1,6 @@
 # 06 — Doctor: check runner, F1 checks, rendering
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 05
 
@@ -40,6 +40,12 @@ dependency check — the registry's real safety property, as data, without the m
   `WARN`; exit 1 on any FAIL or skip. This preserves the port source's scriptable-gate
   semantics exactly.
 
+  **A skip *is* a FAIL — there is no fourth status.** Stated outright during implementation,
+  because "the statuses are `ok`/`WARN`/`FAIL`" and "exit 1 on any FAIL or skip" only reconcile
+  once someone decides that, and a fourth status satisfies the prose equally while breaking the
+  pinned-statuses criterion below. A skip is a FAIL carrying the port's hand-written message.
+  Structural, so the exit rule needs no separate arithmetic to enforce it.
+
 ### F1 checks, in dependency order
 
 Checks cover **only what has been built** — that is the standing scope rule, and each
@@ -65,7 +71,65 @@ pinned by a literal there; a second hand-written copy here would be two lists to
 step, which is a different defect from the one the literal rule prevents.
 
 Rendering follows the port source: one line per check, status column, name column,
-message, and the hint on failure.
+message, and the hint on failure. `cli.doctor` already exists as a stub returning 0 —
+extend it rather than adding a second path to the same subcommand.
+
+### What the context must carry, and why it is not `os.environ` and not `Path.cwd()`
+
+- **One `start`, threaded to all three callers.** `config.load`, `resolve_base` and
+  `resolve_root_agreement` each take `start`. Doctor must pass the *same* one to all of
+  them. Let any of them default independently and doctor reports on two different
+  directories while printing one report — and root agreement, which exists to catch exactly
+  that disagreement, becomes the check that cannot see it.
+- **`env` is a context field, not a read of `os.environ` inside a check.** Check 3 asks
+  what the developer exported. A check that reads the ambient environment itself can only
+  be tested by mutating the test runner's own environment, which makes the test an
+  assertion about the host: green on the machine that has the variable, red on the one that
+  does not, and vice versa. That is the same shape as issue 03's ambient stdin and issue
+  05's ambient `GIT_DIR` — twice now, in two subsystems, both found after the fact.
+  `config.load` already takes `env`; follow it.
+
+### The two programs doctor checks for cannot be spawned by the suite
+
+`tests/guard.py`'s `ALLOWED_PROGRAMS` is `{"git", "bessemer"}` plus the interpreter by
+path. **`uv` and `docker` are both absent**, so checks 1 and 6 raise `GuardViolation` if a
+test lets them reach a real spawn.
+
+**Do not widen the allowlist.** For `docker` it is a genuine hazard, not a formality — a
+suite permitted to run `docker` is one image pull away from network access on a
+contributor's laptop, and ADR 0002 requires the suite to pass with no daemon at all. The
+check must be testable by handing doctor a stubbed runner instead. That leaves the real
+argv unasserted by the stub, so **pin the argv separately** — a test that reads what the
+check would spawn without spawning it, the way issue 07 pins Dockerfile instructions by
+reading them.
+
+This is worth stating because the tempting fix is two characters in a frozenset, and the
+guard is written to make that a reviewable act rather than a quiet one.
+
+### Doctor prints exception text, and exception text is credential-bearing
+
+The contract above says a crashing check renders as FAIL with the exception text. Issue 03
+raises from `run_checked` with `stderr` in the message, and issue 05 established that git's
+stderr can carry a token from a remote URL. Doctor renders to a terminal today and, from
+F3, into a pull request body — so **this is the first place an unredacted exception reaches
+output**, and the crashing-check path is precisely the one nobody wrote a reason for.
+
+Decide what the crash renderer prints and say so. If redaction is reused, `resolve._redact`
+and `DETAIL_LIMIT` are private to `resolve`; promote them deliberately to a shared home
+rather than copying — a second regex is two redactors that can disagree, and the one that
+disagrees silently is the one printing into a PR.
+
+*Settled during implementation: the shared home is a new `bessemer/redact.py`, importing
+nothing else in the package for the same reason `bessemer.outcome` does — everything that
+reports another program's text imports it, so anything it imported would become a dependency
+of the whole package. `proc` was the alternative and is wrong: the hazard is not spawning, it
+is printing, and `doctor` redacts an exception `proc` never produced.*
+
+**No version floor is checked for `uv` or the interpreter, only presence and usability.**
+`requires-python` is what enforces the floor, at install time, with a better message than
+doctor could produce. Doctor reports both versions and judges neither. Named because "present
+and usable" reads as an invitation to invent a minimum, and a floor bessemer enforces in two
+places is two floors that can disagree.
 
 ## Acceptance criteria
 
@@ -79,6 +143,28 @@ message, and the hint on failure.
 - [ ] Doctor runs and reports usefully outside a git repo, with no `.bessemer/`, and with
       the Docker daemon stopped — no traceback in any of the three
 - [ ] Base and root-agreement lines come from the issue 05 resolvers, not reimplemented
+- [ ] **One `start` reaches `config.load`, `resolve_base` and `resolve_root_agreement`** —
+      proven by a test running doctor against a directory that is not the process's cwd, and
+      getting a report about that directory rather than about where the runner happens to be
+- [ ] **No rendered line carries a credential, at *every* site that prints another program's
+      text** — not only the crashing check. Same construction as issue 05's: a synthetic
+      failure whose stderr holds `https://x-access-token:ghp_…@github.com/…`, asserted absent
+      from the rendered output. One assertion per site: a crashing check, a nonzero `docker
+      info`, a nonzero `uv --version`, and an `OSError` from either.
+
+      The earlier wording named the crash path alone, and that is exactly what shipped: four
+      redacting call sites, one of them pinned, three surviving the mutation that deletes the
+      redactor. A criterion that names one instance of a rule teaches that the rule has one
+      instance. Where a test already goes red on such a mutation, check *which* assertion
+      fired — the `uv` site went red for losing `detail()`'s first-line behaviour, which is a
+      test passing for a reason other than the one wanted
+- [ ] **`DETAIL_LIMIT` is pinned by a test**: `detail()` of a long single line is capped.
+      `bessemer/redact.py` now sits on the path of everything bessemer prints that it did not
+      write, with two consumers reading the cap by different routes, and a cap enforced by
+      nothing is a docstring. Whichever file owns `redact` owns this test
+- [ ] **No test spawns `docker` or `uv`**, and the argv each check would spawn is pinned by a
+      test that does not spawn it. `ALLOWED_PROGRAMS` is unchanged by this issue; if you
+      believe it must change, stop and say why rather than changing it
 - [ ] **The check list and the status values are pinned by hand-written literals.** A test
       restates the six check names in order, and another restates `ok`/`WARN`/`FAIL`.
       Without this, deleting a check makes doctor print five lines and exit 0 with the

@@ -17,7 +17,15 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    written host-side by a human: an edit to either in the diff is not the implementer's work.
    The implementer is required to stop and raise an ADR conflict rather than resolve it, so an
    ADR hunk sitting beside code that depends on it is the process working, not a bypass of it
-3. **The whole change, which is not what `git diff` shows you.** Nothing is committed when you
+3. **The port source, when the issue says the work is a port.** `IMPLEMENTING.md` names the
+   file and line range; the tree is at `/Users/sbowles/hae`, branch `agentbox`, commit
+   `e194121f75f4`, and your session must be launched with `--add-dir /Users/sbowles/hae` to
+   read it. Without it you can check that the code is self-consistent but not that it is a
+   port — and "port the frame" issues put the line format, the dependency ordering, the
+   hand-written skip messages and the exit semantics beyond your reach. Read it before the
+   diff; behaviour the port source got right and this one dropped is a finding, and so is
+   behaviour copied that no longer makes sense here. If the issue is not a port, skip this.
+4. **The whole change, which is not what `git diff` shows you.** Nothing is committed when you
    review, and an issue's most important files are usually the *new* ones — `git diff` omits
    every untracked file silently, so it renders a green, complete-looking diff of the leftovers.
    Issue 07 is the case to remember: `git diff` showed `.gitignore`, an ADR and the issue file,
@@ -31,9 +39,9 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
 
    Read every untracked file in full. If the issue's headline deliverable is not in your diff,
    that is the symptom, not an absence of work
-4. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
+5. `docs/adr/0002-skeleton-structure.md` and `CONTEXT.md` — the decisions and vocabulary the
    change must conform to
-5. `docs/adr/0001-founding-decisions.md` — if the issue touches a security invariant
+6. `docs/adr/0001-founding-decisions.md` — if the issue touches a security invariant
 
 ## What to check, in priority order
 
@@ -56,6 +64,21 @@ This also rehearses F3's reviewer pass, so a weakness in these instructions is w
    all reads identically to one guarding a property, and every red row in your report means
    less than it appears to. Report the control alongside the battery even when it finds
    nothing; that it found nothing is the result.
+
+   **Prove the mutation applied before you believe a green.** A scripted edit that matches
+   nothing leaves the tree untouched, and the suite you then run is the unmutated one — which
+   reads exactly like a mutation the tests failed to catch, and gets reported as a defect that
+   does not exist. Assert the file changed (`assert new != old`) or print the mutated lines
+   back. Measured during issue 06: a substitution written against `"<redacted>@"` matched
+   nothing, because the source used a `REDACTED` constant, and the green run was the original
+   code passing its own tests. This is the review layer catching itself in the same failure it
+   exists to find.
+
+   **Clear `__pycache__` between mutation runs.** A mutation that preserves file size and
+   mtime granularity — a status constant swapped for another of the same length, two lines
+   reordered — can leave Python serving stale bytecode, so the restored tree looks broken or
+   the mutant looks green. `find . -name __pycache__ -prune -exec rm -rf {} +` before each run.
+   Found while mutating issue 06, where two of the mutations were byte-identical in length.
 
    **A test derived from the thing it checks cannot notice that thing shrinking.** If the
    assertion iterates the same list the code iterates, deleting an entry removes it from both

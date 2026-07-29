@@ -96,7 +96,9 @@ encode your assumptions about git rather than git.
 `--add-dir /Users/sbowles/hae`). The check-runner frame is a port of `.agentbox/run.sh` lines
 303–420 at commit `e194121f75f4` — read it first. Port the frame: the ok/WARN/FAIL line format,
 dependency ordering, the hand-written skip messages, the exit semantics. Do **not** port its
-check list; F1's checks are the five named in the issue.
+check list; F1's checks are the ones named in the issue, which owns that list. This line said
+"the five" while the issue named six — a count restated in two files is two counts that can
+disagree, and the one an implementer with nobody to ask would have followed is the wrong one.
 
 **07 — own adapter.** Verify the Dockerfile actually builds, and that the `agent` user's UID
 inside the built image matches the `AGENT_UID` build argument. A Dockerfile that has never been

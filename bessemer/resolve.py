@@ -62,8 +62,9 @@ from F3 dispatch renders one into a pull request body. The decision, per reason:
   bessemer's to state.
 - The reasons for a git failure bessemer **could not** diagnose carry git's first `stderr`
   line, redacted and truncated. Dropping it would leave "git exited 128" and nothing else,
-  which is not a reason a user can act on. `_redact` is what makes that safe, and its limit
-  is named there.
+  which is not a reason a user can act on. `bessemer.redact` is what makes that safe, and its
+  limit is named there. It lived here as a private helper until issue 06 needed the same
+  redaction for a crashing check's exception text and promoted it rather than copying it.
 
 `git rev-parse` failing is the sharp case: "not a git repository" and "bad config line 1 in
 file .git/config" are both `fatal:` at exit 128, so bessemer cannot tell them apart by
@@ -92,12 +93,11 @@ The cases are told apart by their `reason` and `hint` text and by nothing else, 
 """
 
 import os
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
-from bessemer import proc
+from bessemer import proc, redact
 from bessemer.config import ADAPTER_DIR, COMMITTED_FILE, Config
 from bessemer.outcome import Resolved, Unresolved
 
@@ -175,49 +175,16 @@ without `GIT_DIR`, because git honours `core.worktree` only for a repository nam
 configuration**.
 """
 
-DETAIL_LIMIT: Final = 200
-"""How much of git's own `stderr` may appear in a reason, after redaction.
-
-A cap rather than a judgement about content: git can emit a screen of advice, and a check
-line that becomes a paragraph stops being read. Applied after `_redact`, never before —
-truncating first would leave the redactor a line it never saw.
-"""
-
-_CREDENTIAL_IN_URL: Final = re.compile(r"(?<=://)[^/@\s]*@")
-"""Userinfo in a URL: everything between `://` and the `@` that ends the authority.
-
-**This is a redactor for how git leaks credentials, not a general secret scanner.** That is
-the named limit. A token reaches git's output by riding in a remote URL —
-`https://x-access-token:ghp_…@github.com/o/r.git` — because that is where a credential
-helper, a CI checkout, or an `insteadOf` rewrite puts it, and git echoes the URL when a
-remote operation fails. A secret pasted into `stderr` some other way is not covered, and
-nothing here pretends it is; what is covered is the shape that actually occurs.
-
-Redacting the whole authority userinfo rather than matching token prefixes: `ghp_`,
-`github_pat_`, `glpat-` and whatever the next forge invents are a list that goes stale,
-while "the part of a URL before the `@`" is the grammar itself. `git@github.com:o/r.git`
-carries no secret and has no `://`, so scp-style remotes are left alone.
-"""
-
-
-def _redact(text: str) -> str:
-    """Remove credentials from anything of git's that is about to be shown to a user."""
-    return _CREDENTIAL_IN_URL.sub("<redacted>@", text)
-
 
 def _git_detail(result: proc.Result) -> str:
     """git's own first word on a failure, safe to print: first line, redacted, truncated.
 
-    First line only, because git's later lines are advice aimed at an interactive user and
-    the first is the `fatal:`. Empty when git said nothing, which callers must tolerate —
-    `rev-parse` failing silently is possible and a reason ending in a bare colon is worse
-    than one that stops.
+    A one-line spelling of `bessemer.redact.detail` over git's `stderr` specifically, kept
+    so the call sites below read as being about git rather than about a text helper. The
+    redaction itself is shared with doctor's crashing-check renderer — see `bessemer.redact`
+    for why there is exactly one of it.
     """
-    for line in result.stderr.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return _redact(stripped)[:DETAIL_LIMIT]
-    return ""
+    return redact.detail(result.stderr)
 
 
 def _saying(detail: str) -> str:
@@ -229,10 +196,11 @@ def _quote(value: object) -> str:
     """A configured value as it should appear in a reason: short, and unambiguous.
 
     `repr`, so `""` and `"  "` are visible rather than rendering as nothing, and truncated
-    for the same reason `DETAIL_LIMIT` exists. This echoes a value out of the adapter's own
-    config file — not out of git — so it is the user's own text coming back to them.
+    for the same reason `bessemer.redact.DETAIL_LIMIT` exists. This echoes a value out of the
+    adapter's own config file — not out of git — so it is the user's own text coming back to
+    them, and it is not redacted for that reason: nothing here is another program's output.
     """
-    return repr(value)[:DETAIL_LIMIT]
+    return repr(value)[: redact.DETAIL_LIMIT]
 
 
 def _base_not_a_string(cfg: Config, value: object) -> Unresolved:
