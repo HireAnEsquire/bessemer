@@ -24,11 +24,11 @@ home, and nowhere else.
   | `dispatch.py` | `dispatch(...) -> RunOutcome` | Orchestration: the guard sequence, lock acquire/release, log rotation, cleanup ordering (run.sh's trap semantics as try/finally), the step counter, the end notification. The only module the CLI calls. |
   | `checkout.py` | create / `read_branch` / `salvage` / remove | The never-git-inside-the-checkout discipline: `--no-hardlinks` clone, identity config, textual `.git/HEAD` read, FF-only upload-pack fetch. |
   | `container.py` | `start` / `run_setup_hook` / `remove`; the argv builders `run_argv` / `chown_argv` / `setup_hook_argv` / `remove_argv`; `Boundary`, `forwarding` / `Forwarding` / `mount_points` / `SetupHookError` | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. |
-  | `passes.py` | `run_pass(...) -> PassResult`; `review_loop(...) -> Verdict` | Retry ladder, per-pass timeout, stream-filter plumbing, heartbeat, dead-container abort, verdict-token parse, the round cap. |
+  | `passes.py` | `run_pass(...) -> PassResult`; `review_loop(...) -> Verdict`; the argv builders `pass_argv` / `liveness_argv`; `review_prompt`; `Limits` | Retry ladder, per-pass timeout, stream-filter plumbing, heartbeat, dead-container abort, verdict-token parse, the round cap. |
   | `landing.py` | `land(...) -> Landing` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
   | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. |
   | `prompts.py` | `load(name) -> str`; `overridden(adapter_dir)`; `TEMPLATE_NAMES` | Package-default vs `.bessemer/prompts/` override resolution (ADR 0001). Two consumers at F3 already: the three passes, and doctor's override count — `overridden` exists so doctor never restates the override path (added at issue 03, 2026-08-05). |
-  | `stream.py` | `filtered(transcript, *, emit) -> Capture`; `brief(inputs)` | The provider's stream-json: the `claude \|/>` rendering and final-text capture, which ADR 0001 names as one surface. Pure — no proc, no filesystem — because F3 README decision 5.1 moved it out of the container, where the pin ran it as `python3 /agentbox/stream-filter.py` (run.sh:1099) on an assumption about the adapter image. Its consumer at F3 will be `passes.py`, which issue 07 has yet to write (added at issue 05, 2026-08-05). |
+  | `stream.py` | `filtered(transcript, *, emit) -> Capture`; `brief(inputs)` | The provider's stream-json: the `claude \|/>` rendering and final-text capture, which ADR 0001 names as one surface. Pure — no proc, no filesystem — because F3 README decision 5.1 moved it out of the container, where the pin ran it as `python3 /agentbox/stream-filter.py` (run.sh:1099) on an assumption about the adapter image. Its consumer at F3 is `passes.py`, which renders each attempt's transcript through it and reads the verdict out of the capture (added at issue 05, consumer landed at issue 07, both 2026-08-05). |
 
 - **`checkout.py` and `container.py` stay separate.** *Rejected: one `environment.py`*
   (CONTEXT.md groups them as "the isolated environment") — their failure domains and
@@ -105,6 +105,29 @@ home, and nowhere else.
   standing for "no capabilities, the usual limits" is a privilege decision acquired by
   omission, and the limits' real defaults live in `config.DEFAULTS`, where restating them
   would be two values free to disagree about a security posture.
+
+- **An agent pass runs on a second proc seam, `proc.Streamer`** (added at issue 07,
+  2026-08-05). `Runner` describes a child that answers a question inside a deadline, which
+  is every child bessemer has except one: a pass takes a prompt on **stdin**, writes a
+  transcript for minutes, and has to be rendered into the run log while it runs rather than
+  after it ends. `proc.streamed` is that call and `Streamer` is its protocol, declared beside
+  `Runner` for the reason `Runner` moved into `proc.py` at issue 04 — one declaration, in
+  the module whose own function it is the shape of. Widening `Runner` instead was rejected:
+  it would put four parameters no `docker rm` will ever use on every call site in the
+  package. **`proc.streamed` deliberately takes no `timeout`**, alone in that module: the
+  deadline for a pass is `timeout(1)` *inside* the container, because a host-side kill ends
+  the `docker exec` client and leaves the agent running in the container, wedging it for
+  every later exec. `tests/test_proc.py::StreamTest` pins the absence, so it cannot be added
+  back as a tidying.
+
+- **The pass loop's two config knobs arrive as one value, `passes.Limits`, and it has no
+  defaults** (added at issue 07, 2026-08-05). `container.Boundary`'s shape for
+  `container.Boundary`'s reason, one module along: `pass_timeout` and `max_review_rounds`
+  are the two keys `bessemer.config` deliberately does not coerce — the environment layer
+  hands over strings — and constructing `Limits` is the only route to a pass argv or a
+  review loop, so "a `max_review_rounds` of `"three"` fails before any container work" is
+  structural rather than a check each entry point remembers. The defaults stay in
+  `config.DEFAULTS`, where restating them would be two values free to disagree.
 
 - **The environment git children get is one function, `resolve.git_env`** (promoted at
   issue 04, 2026-08-05). It was private to the resolvers, which read; `checkout.salvage`

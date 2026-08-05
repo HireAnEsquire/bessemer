@@ -42,12 +42,12 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 942–952 | preflight: docker, gh, credential, image presence | F3 | 09, 10 | — |
 | 954–1002 | fetch, `BASE_SHA`, merge-base; `--hard-reset` block | F3 / hard-reset F4 | 10 | — |
 | 1004–1021 | `check_no_inflight_run` (lock pid + container name) | F3 | 10 | — |
-| 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | — |
+| 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | `tests.test_passes` (part) |
 | 1132–1190 | slug/lock/log derivation, stale cleanup, cleanup trap | F3 | 04, 10 | `tests.test_checkout` (part) |
 | 1203–1282 | checkout clone, container run, setup hook invocation | F3 | 04, 06 | `tests.test_checkout`, `tests.test_container` |
 | 1292–1431 | feature loop, per-issue `Status:` writes, checklist merge | F4 | — | — |
-| 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | — |
-| 1494–1527 | review loop, verdict break | F3 | 07 | — |
+| 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | `tests.test_passes` (part) |
+| 1494–1527 | review loop, verdict break | F3 | 07 | `tests.test_passes` |
 | 1529–1592 | push, PR-description pass, draft PR open/update | F3 | 08 | — |
 | 1594–1644 | end notification, ledger append | F3 | 10 | — |
 | 1647–1724 | `--dry-run` plan | F5 | — | — |
@@ -72,6 +72,17 @@ show what nobody ported, so a row half-covered has to say so rather than read as
 day — the container run, the chown exec and the setup-hook invocation, pinned by
 `tests.test_container` — so that row is no longer part-covered; `1132–1190` still is, with
 slug/lock/log derivation and the trap wiring open to issue 10.
+
+Issue 07 landed 2026-08-05: `bessemer/passes.py` pins `:1494–1527` whole — the round cap, the
+`<verdict>approved</verdict>` break and both pull-request footers — and the pass mechanism out
+of `:1090–1130`, which is why `1028–1130` is **(part)**: say/banner/step and notify are issue
+10's half of that region and nothing pins them yet. `1432–1492` is **(part)** for the mirror
+reason — the implement *pass* is `run_pass`, and the dispatcher's generated preamble around it
+is still issue 10's. Two things arrived with it and are recorded in
+[ADR 0003](../../../docs/adr/0003-dispatch-structure.md) rather than here: a second proc seam
+(`proc.Streamer`, for the one child that takes a prompt on stdin and is rendered while it
+runs, and which deliberately has no host-side timeout), and `passes.Limits`, the parameter
+object that makes a non-numeric `pass_timeout` fail before any container work.
 
 `:1210–1212`'s `client/node_modules` pre-create was recorded here at issue 04 as hae adapter
 content, excised and owed no test. **Corrected at issue 06, 2026-08-05:** the *path* is hae's

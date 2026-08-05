@@ -11,13 +11,15 @@ remote, and this suite may not.
 """
 
 import contextlib
+import inspect
 import os
 import pty
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -306,6 +308,157 @@ class RunCheckedTest(unittest.TestCase):
         stopped carrying anything."""
         error = self.failing_call()
         self.assertTrue(any("no such ref" in text for text in strings_within(error)))
+
+
+class StreamTest(unittest.TestCase):
+    """The second seam: a prompt in on stdin, a transcript out line by line, no deadline.
+
+    Every child here is `sys.executable`, like the rest of this file. The one thing that
+    cannot be a literal is time: two tests wait on a child that sleeps for a fraction of a
+    second, because "the caller saw the line before the child exited" and "idle fires while
+    it runs" are claims about concurrency and nothing else can hold them.
+    """
+
+    POLL: Final = 0.05
+    """Short, because it is how often the wait loop looks up, not a deadline."""
+
+    def consumed(
+        self,
+        argv: list[str],
+        *,
+        stdin_text: str = "",
+        idle: Callable[[], None] = lambda: None,
+    ) -> tuple[Result, list[str]]:
+        """Run `argv` through `stream`, collecting the lines the consumer was handed."""
+        lines: list[str] = []
+
+        def consume(handle: Iterable[str]) -> None:
+            lines.extend(line.rstrip("\n") for line in handle)
+
+        result = proc.streamed(
+            argv, stdin_text=stdin_text, consume=consume, idle=idle, poll=self.POLL
+        )
+        return result, lines
+
+    def test_stdin_reaches_the_child_and_its_output_reaches_the_consumer(self) -> None:
+        result, lines = self.consumed(
+            python("import sys", "print(sys.stdin.read().strip().upper())"),
+            stdin_text="a prompt\n",
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(lines, ["A PROMPT"])
+
+    def test_a_nonzero_exit_is_a_result_and_not_an_exception(self) -> None:
+        """`run`'s contract, unchanged: a failed process is data. `bessemer.passes` retries
+        on it, and an exception there would be a `try` around every attempt."""
+        result, _ = self.consumed(python("raise SystemExit(124)"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.returncode, 124)
+
+    def test_the_childs_stderr_is_merged_into_the_stream(self) -> None:
+        """One pipe, one reader — see the docstring. A docker or provider error lands in the
+        run log in order rather than in a second channel nobody drains."""
+        _, lines = self.consumed(
+            python("import sys", "print('out')", "sys.stderr.write('boom\\n')")
+        )
+        self.assertIn("out", lines)
+        self.assertIn("boom", lines)
+
+    def test_the_result_carries_no_output(self) -> None:
+        """The transcript went to the consumer as it arrived and is not held here."""
+        result, lines = self.consumed(python("print('rendered')"))
+        self.assertEqual(lines, ["rendered"])
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_idle_fires_while_the_child_is_still_running(self) -> None:
+        beats = 0
+
+        def idle() -> None:
+            nonlocal beats
+            beats += 1
+
+        result, _ = self.consumed(
+            python("import time", "time.sleep(0.3)", "print('slow')"), idle=idle
+        )
+        self.assertTrue(result.ok)
+        self.assertGreaterEqual(beats, 1)
+
+    def test_a_line_reaches_the_consumer_before_the_child_exits(self) -> None:
+        """The whole reason this is not `run`: a pass takes minutes and its log is read while
+        it runs. Timed rather than asserted about buffering, because buffering is what would
+        break it."""
+        arrivals: list[float] = []
+
+        def consume(handle: Iterable[str]) -> None:
+            for _ in handle:
+                arrivals.append(time.monotonic())
+
+        proc.streamed(
+            python(
+                "import sys, time",
+                "print('early', flush=True)",
+                "time.sleep(0.3)",
+                "print('late', flush=True)",
+            ),
+            stdin_text="",
+            consume=consume,
+            idle=lambda: None,
+            poll=self.POLL,
+        )
+        self.assertEqual(len(arrivals), 2)
+        self.assertGreaterEqual(arrivals[1] - arrivals[0], 0.15)
+
+    def test_a_prompt_larger_than_a_pipe_buffer_does_not_deadlock(self) -> None:
+        """Why the write happens off the main thread. A prompt bigger than the kernel's pipe
+        buffer blocks its writer until the child reads, and the child here writes first —
+        which is a deadlock in any arrangement that writes stdin before reading stdout."""
+        prompt = "x" * (512 * 1024)
+        result, lines = self.consumed(
+            python(
+                "import sys",
+                "print('y' * 200_000, flush=True)",
+                "print(len(sys.stdin.read()))",
+            ),
+            stdin_text=prompt,
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(lines[-1], str(len(prompt)))
+
+    def test_a_consumer_that_raises_is_re_raised_and_does_not_wedge_the_child(self) -> None:
+        """An exception on a thread otherwise reaches nothing but `sys.unraisablehook`, and a
+        consumer that stopped draining would block the child on a full pipe forever."""
+
+        def consume(handle: Iterable[str]) -> None:
+            next(iter(handle))
+            raise RuntimeError("the log went away")
+
+        with self.assertRaises(RuntimeError) as caught:
+            proc.streamed(
+                python("for n in range(20_000): print(n)"),
+                stdin_text="",
+                consume=consume,
+                idle=lambda: None,
+                poll=self.POLL,
+            )
+        self.assertIn("the log went away", str(caught.exception))
+
+    def test_a_string_argv_is_refused(self) -> None:
+        """`run`'s guard, at the second entry point: a `str` is a `Sequence[str]`."""
+        erased: Callable[..., object] = proc.streamed
+        with self.assertRaises(TypeError):
+            erased(
+                "echo hi", stdin_text="", consume=lambda lines: None, idle=lambda: None, poll=1
+            )
+
+    def test_there_is_no_host_side_timeout(self) -> None:
+        """The absence is the decision, so it is pinned rather than left to be added back.
+
+        A host-side kill would end the `docker exec` client and leave the agent running in the
+        container, wedging it for every later exec. The deadline is `bessemer.passes`'
+        in-container `timeout`.
+        """
+        self.assertNotIn("timeout", inspect.signature(proc.streamed).parameters)
 
 
 class ResultTest(unittest.TestCase):

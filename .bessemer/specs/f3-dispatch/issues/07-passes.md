@@ -1,6 +1,6 @@
 # 07 — passes: run_pass, the review loop, the verdict
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 05, 06
 
