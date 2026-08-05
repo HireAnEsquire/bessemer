@@ -54,7 +54,10 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 1726–1732 | dispatch entry | F3 | 10 | — |
 
 (The host-side stream filter — decision 5.1's divergence — has no run.sh row; its oracle
-is `.agentbox/stream-filter.py` at the pin, owned by issue 05.)
+is `.agentbox/stream-filter.py` at the pin, owned by issue 05. Likewise the three prompt
+templates: oracles are `.agentbox/{implement,review,pr}-prompt.md` at the pin, owned by
+issue 03 — landed 2026-08-05, pinned by `tests.test_prompts` (sections, deltas, retired-word
+absence). The `1432–1492` row's test column stays open until 07 and 10 land their parts.)
 
 ## Decisions
 

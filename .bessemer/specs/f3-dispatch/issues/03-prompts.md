@@ -1,6 +1,6 @@
 # 03 — prompts: override resolution and the stack-agnostic defaults
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: —
 
@@ -13,9 +13,20 @@ default templates, rewritten stack-agnostic, and bessemer's own repo overrides.
 **The templates this issue owns — all three, named:** `implement-prompt.md`,
 `review-prompt.md`, `pr-prompt.md`. Oracle:
 `git show e194121f75f4:.agentbox/<name>` in `/Users/sbowles/hae`. Section order per
-template is an owned list (implement: TASK / ORIENTATION / COMMANDS / IMPLEMENT / VERIFY /
-COMMIT / RULES; review: ROLE / REVIEW / FIX / VERDICT / RULES; pr: ROLE / STRUCTURE /
-MANUAL TESTING ASSUMPTIONS).
+template is an owned list (implement: SPEC / ORIENTATION / COMMANDS / IMPLEMENT / VERIFY /
+COMMIT / RULES — *SPEC, not the pin's TASK: ruled host-side at this issue's review
+(2026-08-05); CONTEXT.md retires "task" entirely and the issue as first written pinned the
+pin's heading without reconciling the vocabulary. The oracle's heading is `# TASK`; the
+port renames it, same rule as `specs_dir`* —; review: ROLE / REVIEW / FIX / VERDICT /
+RULES; pr: ROLE / STRUCTURE /
+MANUAL TESTING ASSUMPTIONS / FORMAT). *(FORMAT was missing from the pr list as first
+written — caught by this issue's implementer against the oracle, corrected host-side
+2026-08-05.)* FORMAT is stack-agnostic and stays in the default: its every-line-lands-
+verbatim contract (no preamble, no code fence, no title line) is what issue 08's body
+composition depends on, so its contract sentence is a pinned literal alongside this
+issue's security sentences. Its parenthetical naming the first STRUCTURE section
+("the migrations callout or the overview") follows whatever the stack-neutral STRUCTURE
+names first — the contract is pinned, the example tracks the neutral template.
 
 ## Defaults: hae excised, three deltas added (README decision 7)
 
@@ -23,6 +34,12 @@ Excise every hae-specific passage (implement's ORIENTATION/VERIFY, pr-prompt's M
 TESTING URLs and `docker exec hae-api-1` — the pr-prompt delta is **excision only**, no
 content additions). The parity story that makes excision safe: hae's overrides restore
 today's text byte-for-byte at F7.
+
+**Also excised — the feedback blocks** *(named here after the implementer caught the
+omission, 2026-08-05)*: the pin's review-prompt and pr-prompt each carry a
+`--- Dispatcher feedback ---` paragraph. Not hae-specific, so the sentence above does not
+cover them — README decision 1 does: the whole feedback family is F4's, and "F3's prompts
+carry no feedback section." F4 restores them with the rest of the mechanism.
 
 Content deltas, **each pinned as a test literal — they are controls**:
 

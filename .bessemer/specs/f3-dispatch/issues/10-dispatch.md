@@ -67,6 +67,11 @@ no exec after the liveness check.
 - [ ] Debt 3 round-trip green; mutate `LOGS_DIR` rendezvous and it fails (prove,
       restore)
 - [ ] Path-typed inputs end-to-end; the ledger line's JSON round-trips
+- [ ] Resolve or keep, stated either way: the implement prompt's SPEC section names
+      `/spec.md` and the dispatcher's generated preamble (the pin assembles at
+      run.sh:1476) repeats it — inherited duplication flagged by issue 03's implementer.
+      Keeping it is legal (it is the pin's shape); silently shipping both without a ruling
+      is not
 - [ ] SurfaceTest pin updated by hand; base chain exercised at three depths (flag,
       ledger, auto-detect)
 - [ ] No stderr fragment in notification text or any agent-visible string — through

@@ -11,6 +11,13 @@ section), run by the human on a scratch branch of this repo, plus the tier-3 sui
 lives outside `make check`. HITL because it drives real credentials, a real push, and a
 real PR — and because the evidence is observed, not scripted.
 
+**Known blocker to clear first** (found by issue 03's implementer, 2026-08-05): bessemer's
+own override prompts say VERIFY = `make check`, but `.bessemer/Dockerfile` installs no uv
+and `.bessemer/setup.sh` is a no-op — its own comment already records that installing uv
+belongs in the hook. Until the hook installs uv, the first dogfood dispatch fails at
+VERIFY. This issue owns making bessemer's own setup hook real enough for the tracer; the
+hook edit is adapter content, verified here by the tracer run itself.
+
 ## What to build (the AFK-able part)
 
 - The tier-3 test directory and make target (suggested `tests/integration/` +

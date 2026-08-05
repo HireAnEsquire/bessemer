@@ -80,6 +80,8 @@ TRACKED_PATHS: Final = (
     ".bessemer/config.toml",
     ".bessemer/Dockerfile",
     ".bessemer/setup.sh",
+    ".bessemer/prompts/implement-prompt.md",
+    ".bessemer/prompts/review-prompt.md",
     ".bessemer/specs/f1-skeleton/README.md",
 )
 """The adapter itself, plus a spec. Asserted alongside the list above rather than trusted.
@@ -87,6 +89,12 @@ TRACKED_PATHS: Final = (
 A rule broad enough to ignore `.bessemer/` wholesale would satisfy every assertion about the
 runtime paths while quietly removing this project's development record from the repository —
 which is the failure the two lists together are here to make impossible.
+
+The prompt overrides (F3 issue 03) are adapter content in exactly the sense the other three
+files are: committed, reviewable, and read at dispatch time. They are also the adapter file
+most likely to be mistaken for runtime state, sitting one directory away from `logs/` and
+`locks/` — which is the case for naming them here rather than trusting the rule that happens
+to cover them today.
 """
 
 
