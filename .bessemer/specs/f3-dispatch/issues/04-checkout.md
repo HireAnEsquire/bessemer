@@ -1,6 +1,6 @@
 # 04 — checkout: the never-git-inside-it discipline
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: —
 

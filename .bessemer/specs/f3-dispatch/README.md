@@ -43,8 +43,8 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 954–1002 | fetch, `BASE_SHA`, merge-base; `--hard-reset` block | F3 / hard-reset F4 | 10 | — |
 | 1004–1021 | `check_no_inflight_run` (lock pid + container name) | F3 | 10 | — |
 | 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | — |
-| 1132–1190 | slug/lock/log derivation, stale cleanup, cleanup trap | F3 | 04, 10 | — |
-| 1203–1282 | checkout clone, container run, setup hook invocation | F3 | 04, 06 | — |
+| 1132–1190 | slug/lock/log derivation, stale cleanup, cleanup trap | F3 | 04, 10 | `tests.test_checkout` (part) |
+| 1203–1282 | checkout clone, container run, setup hook invocation | F3 | 04, 06 | `tests.test_checkout` (part) |
 | 1292–1431 | feature loop, per-issue `Status:` writes, checklist merge | F4 | — | — |
 | 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | — |
 | 1494–1527 | review loop, verdict break | F3 | 07 | — |
@@ -57,7 +57,15 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 is `.agentbox/stream-filter.py` at the pin, owned by issue 05. Likewise the three prompt
 templates: oracles are `.agentbox/{implement,review,pr}-prompt.md` at the pin, owned by
 issue 03 — landed 2026-08-05, pinned by `tests.test_prompts` (sections, deltas, retired-word
-absence). The `1432–1492` row's test column stays open until 07 and 10 land their parts.)
+absence). The `1432–1492` row's test column stays open until 07 and 10 land their parts.
+
+Issue 04 landed 2026-08-05 and its two rows are marked **(part)** — the manifest's job is to
+show what nobody ported, so a row half-covered has to say so rather than read as done.
+`tests.test_checkout` pins `:1161–1162`'s removal, `:1169–1190`'s salvage fetch, and
+`:1203–1209`'s clone plus identity writes. Still open in those rows: slug/lock/log derivation
+and the trap wiring itself (issue 10), and the container and setup-hook invocations (issue
+06). `:1210–1212`'s `client/node_modules` pre-create is hae adapter content, excised rather
+than ported, and is owed no test.)
 
 ## Decisions
 

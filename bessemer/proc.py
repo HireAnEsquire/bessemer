@@ -51,7 +51,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final, Protocol, assert_never
 
 from bessemer import redact
 
@@ -211,6 +211,34 @@ def quote(result: Result, *, destination: Destination) -> str:
             program = Path(result.argv[0]).name if result.argv else ""
             return f"{program or _NO_PROGRAM} exited {result.returncode}"
     assert_never(destination)
+
+
+class Runner(Protocol):
+    """The shape of `run` — what an effectful module accepts instead of spawning for itself.
+
+    ADR 0003: every effectful module takes its proc callable and none creates it, so
+    `dispatch.py` composes the real one and tier-2 tests compose the recording double at the
+    same seam. That is one seam with two adapters rather than a mock; the double is a thin
+    table over the real `Result` type.
+
+    A protocol rather than `Callable[..., Result]`, so a stand-in that quietly drops
+    `timeout` is a type error at the seam rather than a call that spawns without one.
+
+    It lives here because it is the shape of this module's own function. It was declared in
+    `doctor.py` first, at F1; F3 issue 04 needed the same protocol for `bessemer.checkout`
+    and moved the declaration here rather than writing a second one. `doctor.Runner` is now
+    an alias of this name, so the checks and their tests keep the spelling they had and there
+    is still exactly one declaration.
+    """
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> Result: ...
 
 
 def run(

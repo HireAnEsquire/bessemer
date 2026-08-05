@@ -55,7 +55,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import takewhile
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Final
 
 from bessemer import config, proc, redact, resolve
 from bessemer.config import Config
@@ -199,21 +199,15 @@ class CheckResult:
         return self.status in PASSING
 
 
-class Runner(Protocol):
-    """The one spawn seam. `bessemer.proc.run` satisfies it; tests hand in a stand-in.
+Runner = proc.Runner
+"""The one spawn seam. `bessemer.proc.run` satisfies it; tests hand in a stand-in.
 
-    A protocol rather than `Callable[..., proc.Result]`, so a stand-in that drops `timeout`
-    is a type error here rather than a check that spawns without one.
-    """
-
-    def __call__(
-        self,
-        argv: Sequence[str],
-        *,
-        timeout: float,
-        cwd: Path | None = None,
-        env: Mapping[str, str] | None = None,
-    ) -> proc.Result: ...
+An alias, not a declaration. It was declared here first, and F3 issue 04 needed the same
+protocol for `bessemer.checkout` — so the declaration moved to `bessemer.proc`, where it is
+the shape of that module's own `run`, and this name stays as the one every check and every
+doctor test already spells. Two identical protocol declarations would have been
+interchangeable by structural typing and drifted anyway; see `proc.Runner` for the argument.
+"""
 
 
 @dataclass

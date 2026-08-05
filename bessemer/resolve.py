@@ -554,13 +554,24 @@ def _relate(config_root: Path, git_root: Path) -> str | Unresolved:
     return UNRELATED
 
 
-def _git_env() -> Mapping[str, str]:
+def git_env() -> Mapping[str, str]:
     """This process's environment, minus the variables that redirect git's answers.
 
     Read at call time rather than captured at import, so a long-lived process that changed
     its own environment — a test, or F3's dispatcher — gets the environment it has now
     rather than the one it started with. See `REDIRECTING_VARIABLES` for the policy and for
     why this subtracts rather than allowlists.
+
+    **Public, and it was private until `bessemer.checkout` needed it** (F3 issue 04). The
+    policy has two consumers now and one of them is a write: an exported `GIT_DIR` makes
+    `resolve_root_agreement` answer about the wrong repository, and it makes checkout's
+    salvage fetch *write into* the wrong repository. Sharing the list and copying the
+    comprehension would have left the second consumer one edit away from disagreeing about
+    what "minus" means, so the function moved rather than the constant alone.
+
+    It stays here rather than in `bessemer.proc`: `proc` owns argv and knows nothing about
+    git, and a git-specific environment policy in the module that spawns docker too would be
+    a rule applied by proximity. Promote it only if a non-git consumer appears.
     """
     return {
         name: value for name, value in os.environ.items() if name not in REDIRECTING_VARIABLES
@@ -584,7 +595,7 @@ def _git(arguments: Sequence[str], *, cwd: Path) -> proc.Result | Unresolved:
     """
     argv = ["git", *arguments]
     try:
-        return proc.run(argv, cwd=cwd, timeout=TIMEOUT_SECONDS, env=_git_env())
+        return proc.run(argv, cwd=cwd, timeout=TIMEOUT_SECONDS, env=git_env())
     except OSError as error:
         # Two causes, one exception type: `subprocess` raises `FileNotFoundError` for an
         # absent `cwd` just as it does for an absent program. They are told apart by

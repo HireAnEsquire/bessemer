@@ -76,6 +76,30 @@ home, and nowhere else.
   One seam, two adapters — the seam is real. The double is a thin table over the real
   `Result` type, never a parallel implementation of proc semantics.
 
+  *The seam's type is `proc.Runner`, one declaration* (added at issue 04, 2026-08-05). F1
+  declared the protocol inside `doctor.py`; `checkout.py` was the second module to need it
+  and five more follow, so the declaration moved to `bessemer/proc.py` — where it is the
+  shape of that module's own `run` — and `doctor.Runner` became an alias, keeping the
+  spelling its checks and tests already use. Structural typing would have made two
+  declarations interchangeable and therefore free to drift apart unnoticed, which is the
+  failure mode worth one file move.
+
+  *A module that takes a runner takes it as a required keyword with no default.* A default
+  of `proc.run` is how a module acquires the real spawner by omission, and a test that
+  forgot to pass the double would still go green — against the machine. `doctor.Context`
+  keeps its default because it is a dataclass of shared state rather than a call site;
+  every F3 module spells it out.
+
+- **The environment git children get is one function, `resolve.git_env`** (promoted at
+  issue 04, 2026-08-05). It was private to the resolvers, which read; `checkout.salvage`
+  **writes**, and an exported `GIT_DIR` would send that write into whatever repository it
+  names rather than the main one. Sharing only the variable list and copying the
+  comprehension would leave the two consumers one edit from disagreeing about what
+  "minus those names" means, so the function moved rather than the constant alone. It stays
+  in `resolve.py` rather than `proc.py`: `proc` owns argv and knows nothing about git, and a
+  git-specific environment policy in the module that also spawns docker is a rule applied by
+  proximity.
+
 ## Consequences
 
 - F4's feature loop composes `container` + `passes` + `landing` per issue without new

@@ -1093,7 +1093,7 @@ class AmbientEnvironmentTest(RepoTest):
             "LANG": "en_GB.UTF-8",
         }
         with mock.patch.dict(os.environ, ambient, clear=True):
-            built = resolve._git_env()
+            built = resolve.git_env()
         self.assertEqual(
             dict(built),
             {name: value for name, value in ambient.items() if name != "GIT_DIR"},
