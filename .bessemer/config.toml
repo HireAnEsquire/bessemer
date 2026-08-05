@@ -1,10 +1,10 @@
 # Bessemer's adapter for bessemer — the committed layer, so this repo is its own first
 # adopter and F3 has a real dispatch target on day one.
 #
-# Only keys `bessemer/config.py` actually reads belong here. It reads three — `source`, `base`
-# and `specs_dir` — and a key it does not read is neither honoured nor rejected, so inventing
-# one would be a claim that bessemer is configured by something it never looks at. Adding a key
-# starts in `KNOWN_KEYS`, not here.
+# Only keys `bessemer/config.py` actually reads belong here, and only the ones this repo needs:
+# a key the loader does not read is neither honoured nor rejected, so inventing one would be a
+# claim that bessemer is configured by something it never looks at. Adding a key starts in
+# `KNOWN_KEYS`, not here.
 #
 # Dev-owned values go in `config.local.toml` beside this file, which is gitignored and wins per
 # key. Secrets go in `.bessemer/.env`, also gitignored, and never here.
@@ -27,6 +27,24 @@ source = "git+https://github.com/HireAnEsquire/bessemer@07dcb9bd6989032b20e6521c
 # have not stated one.
 base = "main"
 
+# The adapter image a run's container is started from — the tag `.bessemer/Dockerfile` is built
+# under. No default exists for this key on purpose (an absent `image` is a doctor FAIL and a
+# dispatch hard error), so an adapter that dispatches has to name it, and this repo dispatches
+# itself from F3 onward.
+#
+# Build it the way dispatch expects it, supplying the host UID that owns the bind-mounted
+# checkout:
+#
+#   docker build --build-arg AGENT_UID="$(id -u)" -t bessemer-agent .bessemer
+image = "bessemer-agent"
+
 # `specs_dir` is deliberately absent. It defaults to `.bessemer/specs`, which is already where
 # this repo keeps them, so setting it would restate the default and add a line that has to stay
 # in step with one.
+#
+# So are the five container keys. `container_env_keys`, `container_cap_add` and
+# `container_volumes` default to empty, and bessemer's own container needs no secret beyond the
+# built-in credential names, no capability back after `--cap-drop ALL`, and no volume: its suite
+# is stdlib `unittest` with no services. `pids_limit` and `memory` keep the ported defaults.
+# Writing any of them here would restate a default — and for the three committed-only keys, an
+# empty list written out is a boundary widened by nothing that still has to be reviewed.

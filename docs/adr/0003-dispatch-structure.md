@@ -23,7 +23,7 @@ home, and nowhere else.
   |---|---|---|
   | `dispatch.py` | `dispatch(...) -> RunOutcome` | Orchestration: the guard sequence, lock acquire/release, log rotation, cleanup ordering (run.sh's trap semantics as try/finally), the step counter, the end notification. The only module the CLI calls. |
   | `checkout.py` | create / `read_branch` / `salvage` / remove | The never-git-inside-the-checkout discipline: `--no-hardlinks` clone, identity config, textual `.git/HEAD` read, FF-only upload-pack fetch. |
-  | `container.py` | start / `run_setup_hook` / pure argv builders / remove | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. |
+  | `container.py` | `start` / `run_setup_hook` / `remove`; the argv builders `run_argv` / `chown_argv` / `setup_hook_argv` / `remove_argv`; `Boundary`, `forwarding` / `Forwarding` / `mount_points` / `SetupHookError` | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. |
   | `passes.py` | `run_pass(...) -> PassResult`; `review_loop(...) -> Verdict` | Retry ladder, per-pass timeout, stream-filter plumbing, heartbeat, dead-container abort, verdict-token parse, the round cap. |
   | `landing.py` | `land(...) -> Landing` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
   | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. |
@@ -93,6 +93,18 @@ home, and nowhere else.
   forgot to pass the double would still go green — against the machine. `doctor.Context`
   keeps its default because it is a dataclass of shared state rather than a call site;
   every F3 module spells it out.
+
+- **The container's privilege surface arrives as one value, `container.Boundary`, and it has
+  no defaults** (added at issue 06, 2026-08-05). Five things config decides — cap-adds,
+  volumes, the two limits, and the forwarded environment pairs — are needed by both
+  `run_argv` and `start`, and passing them as ten keyword arguments across two functions is
+  where a call site starts omitting one. The parameter object earns its place by being where
+  they are *checked*: constructing it is the only route to an argv, so "a malformed
+  `container_cap_add` never reaches a flag" is structural rather than a rule the builder
+  remembers. No field has a default, for the reason the runner has none — a `Boundary()`
+  standing for "no capabilities, the usual limits" is a privilege decision acquired by
+  omission, and the limits' real defaults live in `config.DEFAULTS`, where restating them
+  would be two values free to disagree about a security posture.
 
 - **The environment git children get is one function, `resolve.git_env`** (promoted at
   issue 04, 2026-08-05). It was private to the resolvers, which read; `checkout.salvage`

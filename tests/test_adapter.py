@@ -25,7 +25,7 @@ import unittest
 from pathlib import Path
 from typing import Final
 
-from bessemer import config
+from bessemer import config, container
 from bessemer.outcome import Resolved
 from tests.gitenv import fixture_env
 
@@ -34,14 +34,18 @@ REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 
 ADAPTER_DIR: Final = REPO_ROOT / ".bessemer"
 
-ADAPTER_KEYS: Final = {"source", "base"}
+ADAPTER_KEYS: Final = {"source", "base", "image"}
 """The keys `.bessemer/config.toml` is expected to set, restated by hand.
 
 Not derived from the file, and not derived from `config.KNOWN_KEYS` either. Against the file it
 would agree with whatever the file happens to say; against `KNOWN_KEYS` it would accept any key
-the loader grows later, and this adapter is meant to carry only the two it actually needs — a
-`specs_dir` line here would restate the default, and a third key would be a claim this repo is
+the loader grows later, and this adapter is meant to carry only the ones it actually needs — a
+`specs_dir` line here would restate the default, and a fourth key would be a claim this repo is
 configured by something more than it is.
+
+`image` arrived at F3 issue 06, when this repo became a real dispatch target: the key has no
+default (an absent one is a doctor FAIL and a dispatch hard error), so an adapter that
+dispatches must name the tag its Dockerfile is built under.
 """
 
 LOADER_KEYS: Final = {
@@ -157,10 +161,36 @@ class CommittedLayerTest(unittest.TestCase):
         with (ADAPTER_DIR / "config.toml").open("rb") as handle:
             self.assertIsInstance(tomllib.load(handle), dict)
 
-    def test_the_adapter_sets_exactly_source_and_base(self) -> None:
+    def test_the_adapter_sets_exactly_source_base_and_image(self) -> None:
         loaded = config.load(start=REPO_ROOT, env={})
         assert isinstance(loaded, Resolved), loaded
         self.assertEqual(set(loaded.value.committed), ADAPTER_KEYS)
+
+    def test_the_image_names_a_tag_and_comes_from_the_committed_layer(self) -> None:
+        """The team's answer, not a machine's: the tag every dispatch of this repo starts its
+        container from, and the one `docker build -t` in the Dockerfile's own header."""
+        loaded = config.load(start=REPO_ROOT, env={})
+        assert isinstance(loaded, Resolved), loaded
+        self.assertEqual(loaded.value.get("image"), "bessemer-agent")
+        self.assertEqual(loaded.value.layer_of("image"), config.COMMITTED)
+
+    def test_the_five_container_keys_are_left_to_their_defaults(self) -> None:
+        """Bessemer's own container needs no secret beyond the built-in credential names, no
+        capability back after `--cap-drop ALL`, and no volume — its suite is stdlib `unittest`
+        with no services. Writing any of them here would restate a default, and for the three
+        committed-only keys an empty list still costs a reviewer a read.
+        """
+        loaded = config.load(start=REPO_ROOT, env={})
+        assert isinstance(loaded, Resolved), loaded
+        for key in (
+            "container_env_keys",
+            "container_cap_add",
+            "container_volumes",
+            "pids_limit",
+            "memory",
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(loaded.value.layer_of(key), config.DEFAULT)
 
     def test_every_key_in_the_adapter_is_one_the_loader_reads(self) -> None:
         """The criterion, stated as the loader itself answers it. A key here that the loader
@@ -366,21 +396,53 @@ class DockerfileTest(unittest.TestCase):
         inside the checkout* is a script the agent rewrites and sudo then runs as root. Dispatch
         avoids that by bind-mounting the hook read-only at a path of its own.
 
-        **Asserted as a property, not against a mount path.** Where dispatch mounts the checkout
-        is undecided — no ADR names a path — and `workspace` is banned vocabulary for the
-        checkout besides (`CONTEXT.md`). An earlier version of this test asserted
-        `assertNotIn("/workspace", …)`, which is decorative twice over: it invents a contract
-        nobody agreed to, and it cannot fire. Measured — deleting that clause changed no
-        outcome, in either direction, because the assertion doing the work was the one naming
-        the real path.
+        **Asserted as a property, not against a mount path.** When this was written the mount
+        path was undecided, and an earlier version asserting `assertNotIn("/workspace", …)`
+        was decorative twice over: it invented a contract nobody had agreed to, and it could
+        not fire. Measured — deleting that clause changed no outcome, in either direction,
+        because the assertion doing the work was the one naming the real path.
 
-        What holds whatever dispatch chooses is the *shape*: the hook is spelled
-        `<mount>/.bessemer/setup.sh` inside any checkout, so a granted path containing
-        `/.bessemer/` is the checkout's copy no matter where the mount root is.
+        F3 issue 06 decided the mount path, and the *next* test names it. This one stays as
+        the shape assertion it was, because the shape is what holds if the mount ever moves:
+        the hook is spelled `<mount>/.bessemer/setup.sh` inside any checkout, so a granted
+        path containing `/.bessemer/` is the checkout's copy no matter where the mount root is.
         """
         script = self.granted_script()
         self.assertTrue(script.startswith("/"), script)
         self.assertNotIn("/.bessemer/", script)
+
+    def test_the_granted_path_is_outside_the_checkouts_mount(self) -> None:
+        """The same property, now that the mount path is a decision rather than a guess.
+
+        `bessemer.container.CHECKOUT_MOUNT` is where the checkout is mounted read-write, so a
+        grant naming anything under it names a file the agent can rewrite before sudo runs it.
+        Two assertions rather than one prefix test: the mount point itself is not "under"
+        itself.
+
+        The constant is read rather than the path spelled out, so nothing here restates
+        `/workspace` — which CONTEXT.md bans as a word for the **checkout** even where docker
+        takes it as a path.
+        """
+        script = self.granted_script()
+        self.assertNotEqual(script, container.CHECKOUT_MOUNT)
+        self.assertFalse(script.startswith(container.CHECKOUT_MOUNT + "/"), script)
+
+    def test_the_grant_and_the_invocation_dispatch_builds_are_one_string(self) -> None:
+        """The cross-file agreement, which is the half neither file can check alone.
+
+        sudo compares the command it was given against the sudoers text verbatim, so the grant
+        in this Dockerfile and `container.SETUP_HOOK_COMMAND` are one contract written in two
+        repositories' worth of places. Either drifting is a dispatch whose setup step is denied
+        — reported as the hook failing, which sends the reader to the hook.
+
+        Read out of the parsed instruction on this side and out of the module's constant on the
+        other, so neither is derived from the other.
+        """
+        _, _, command = self.grant_instruction().partition("NOPASSWD:")
+        granted = command.partition('"')[0].split()
+        self.assertEqual(tuple(granted), container.SETUP_HOOK_COMMAND[1:])
+        self.assertEqual(container.SETUP_HOOK_COMMAND[0], "sudo")
+        self.assertEqual(self.granted_script(), container.HOOK_MOUNT)
 
     def test_nothing_else_in_the_image_touches_sudo(self) -> None:
         """The other route to the same end: `usermod -aG sudo agent` grants unrestricted root

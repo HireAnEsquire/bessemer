@@ -76,15 +76,18 @@ RUN if ! printf '%s' "${AGENT_UID}" | grep -Eq '^[0-9]+$'; then \
 # script the agent can rewrite and then execute as root. sudo matches the command verbatim, so
 # F3's invocation must be exactly `sudo /usr/bin/bash /bessemer/setup.sh`.
 #
-# Where F3 mounts the checkout is not decided yet and is not decided here: no ADR names a mount
-# path, and this comment naming one would read as a contract that nobody agreed to. What is
-# fixed is the property — the granted path is not the checkout's own copy of the hook, wherever
-# that copy lands.
+# Where F3 mounts the checkout is decided now: `/workspace`, read-write, owned by
+# `bessemer.container.CHECKOUT_MOUNT` and spelled there once. The property is what makes the
+# grant safe either way — the granted path is not the checkout's own copy of the hook — and with
+# the checkout at `/workspace`, `/bessemer/setup.sh` is outside it by construction.
 #
-# Bessemer's own hook needs no root at all (it starts nothing), so this grant could be dropped
-# from *this* adapter. It is kept because F3 must exercise the path every real adapter uses,
-# and an adapter whose setup hook is the one thing never tested through sudo would find that
-# out in someone else's repository.
+# This grant is not optional, and the earlier version of this comment was wrong to say it could
+# be dropped from *this* adapter. Bessemer's own hook needs no root — it starts nothing — but
+# core invokes every hook through sudo, so an image without this line fails its own setup step.
+# Measured at F3 issue 06 on the image this file builds: with the grant and
+# `--cap-add SETUID --cap-add SETGID` the hook exits 0; without the capabilities, sudo exits 1
+# with "unable to change to root gid". The capabilities are core's to add and it adds them
+# unconditionally; the grant is the adapter's half of the same contract.
 RUN echo "agent ALL=(ALL) NOPASSWD: /usr/bin/bash /bessemer/setup.sh" > /etc/sudoers.d/agent \
     && chmod 0440 /etc/sudoers.d/agent
 

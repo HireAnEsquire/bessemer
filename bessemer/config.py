@@ -26,9 +26,10 @@ That promise is kept by a **total** parse boundary rather than by an enumeration
 whose *fix* differs and a final `except Exception` absorbs the rest. An enumeration was
 tried three times and escaped three times.
 
-The six failure cases here — no adapter found, unparseable TOML, a file that is not UTF-8, a
-file that could not be read, whatever the total clause absorbed, and a malformed
-`container_volumes` entry — are told apart by their `reason` and `hint` text and by nothing
+The seven failure cases here — no adapter found, unparseable TOML, a file that is not UTF-8, a
+file that could not be read, whatever the total clause absorbed, a malformed
+`container_volumes` entry, and a `container_env_keys` or `container_cap_add` that is not a
+list of names — are told apart by their `reason` and `hint` text and by nothing
 else. There is no tag and no subtype, so a caller wanting to branch on *which* failure it got
 has to match on prose. That is the deliberate bar at F1: no caller branches on the case yet,
 doctor and dispatch both render or refuse on the pair as a whole, and a tag invented before
@@ -61,6 +62,20 @@ config may not express (F3 decision 5.3). Refusing here rather than in `containe
 the defect doctor-visible instead of surfacing mid-dispatch with a checkout cloned and a
 container half-started. It is the sixth failure case below, and the first that is not about
 reading a file: the TOML parsed, and the loader refuses what it says.
+
+**The seventh is the same argument, applied to the other two list-valued keys** (added at F3
+issue 06, 2026-08-05, from issue 01's review). `container_env_keys = "DATABASE_URL"` — a bare
+string where a list belongs — is a plausible mistake, and a string is iterable: a consumer
+mapping entries to flags walks it character by character and builds
+`--cap-add S --cap-add E …` or forwards an environment variable called `D`. The reason
+volumes are checked here does not stop at volumes, so all three are checked for *shape*: a
+list of non-empty strings.
+
+**Shape here, grammar in `container.py`.** Whether an entry is a capability name or an
+environment variable name is checked where the flags are built, because that module owns the
+patterns and a second copy of them here would be two definitions of the privilege boundary's
+alphabet. This module answers "is this the right kind of value", which is the part that can
+be answered before a dispatch exists.
 """
 
 import os
@@ -441,6 +456,57 @@ which quotes the entry that caused it.
 """
 
 
+NAME_LIST_KEYS: Final = ("container_env_keys", "container_cap_add")
+"""The two list-valued keys whose entries are bare names, checked for shape at load.
+
+`container_volumes` is the third list-valued key and is absent deliberately: its entries have
+a grammar of their own (`_volume_refusal`), and it is checked one step earlier with its own
+hint because the fix for a malformed volume is not the fix for a malformed name list.
+
+Written out rather than derived from `COMMITTED_ONLY_KEYS`, which happens to hold the same
+three keys today for a different reason — being committed-layer-only is a rule about *where*
+a key may be set, and being a list of names is a rule about *what* it may say. Deriving one
+from the other would make the next any-layer list key inherit a check nobody chose.
+"""
+
+NAME_LIST_HINT: Final = (
+    "set container_env_keys and container_cap_add to lists of strings — "
+    '["DATABASE_URL"], not "DATABASE_URL"; a bare string is read one character at a time'
+)
+"""The fix for either name list being the wrong shape, which is why they share one hint.
+
+One sentence for both keys, so the two produce one failure case rather than two that read
+alike. Which key it was is in the reason, where the value that caused it is quoted too.
+"""
+
+
+def _name_list_refusal(value: object) -> str | None:
+    """Why `value` is not a list of names, or `None` if it is. Shape only; see the module
+    docstring for why the grammar of a name is `container.py`'s question and not this one's.
+    """
+    if not isinstance(value, list):
+        return f"is not a list of strings: {value!r}"
+    for entry in value:
+        if not isinstance(entry, str):
+            return f"entry {entry!r} is not a string"
+        if not entry:
+            return f"entry {entry!r} is empty"
+    return None
+
+
+def _climbs_out(mount_point: str) -> bool:
+    """Whether a mount point walks upwards out of the directory it names.
+
+    `/workspace/../../etc` is an absolute path with one `:` and a legal volume name in front
+    of it, so every other rule below accepts it — and issue 06's container module derives a
+    host directory to pre-create from each mount point under the checkout, which is where an
+    entry like that would have the loader's blessing to create `/etc`. Refused as text rather
+    than resolved: resolving asks the filesystem a question about a path that means something
+    inside a container that does not exist yet.
+    """
+    return ".." in mount_point.split("/")
+
+
 def _volume_refusal(volumes: object) -> str | None:
     """Why `volumes` is not a legal `container_volumes` value, or `None` if it is.
 
@@ -481,6 +547,8 @@ def _volume_refusal(volumes: object) -> str | None:
                     f"entry {entry!r} is neither a named volume (name:/path) nor an "
                     f"absolute path (/path)"
                 )
+            if _climbs_out(entry):
+                return f"entry {entry!r} has a mount point containing '..'"
             continue
         source, _, mount_point = entry.partition(":")
         if not source:
@@ -499,6 +567,8 @@ def _volume_refusal(volumes: object) -> str | None:
             return f"entry {entry!r} has a mount point that is not an absolute path"
         if ":" in mount_point:
             return f"entry {entry!r} has more than one ':'"
+        if _climbs_out(mount_point):
+            return f"entry {entry!r} has a mount point containing '..'"
     return None
 
 
@@ -604,6 +674,14 @@ def load(
                             reason=f"{path}: container_volumes {refusal}",
                             hint=VOLUME_HINT,
                         )
+                for key in NAME_LIST_KEYS:
+                    if key in values:
+                        refusal = _name_list_refusal(values[key])
+                        if refusal is not None:
+                            return Unresolved(
+                                reason=f"{path}: {key} {refusal}",
+                                hint=NAME_LIST_HINT,
+                            )
                 layers[name] = values
             case Unresolved() as unresolved:
                 return unresolved

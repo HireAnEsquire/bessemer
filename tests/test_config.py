@@ -866,6 +866,110 @@ class ContainerVolumeTest(TreeTest):
         self.make_adapter(self.tmp, {config.COMMITTED_FILE: "container_volumes = []\n"})
         self.assertEqual(self.load(self.tmp).get("container_volumes"), [])
 
+    def test_a_mount_point_that_climbs_out_of_its_own_directory_is_refused(self) -> None:
+        """`/workspace/../../etc` passes every other rule: a legal volume name, one `:`, an
+        absolute mount point.
+
+        It is refused because issue 06's `container.start` derives a host directory to
+        pre-create from each mount point under the checkout (generalising the pin's
+        `mkdir -p "$wt/client/node_modules"`), so an entry like this one would arrive there
+        with the loader's blessing to create a directory outside the checkout entirely.
+        Both forms are checked — the named one and the anonymous one, which is the form a
+        pre-created mount point is actually written in.
+        """
+        for entry in ("cache:/workspace/../../etc", "/workspace/../../etc"):
+            with self.subTest(entry=entry):
+                refused = self.refusal(entry)
+                self.assertIn(repr(entry), refused.reason)
+                self.assertIn("..", refused.reason)
+
+
+class ContainerNameListTest(TreeTest):
+    """`container_env_keys` and `container_cap_add` checked for shape at load (issue 06).
+
+    The seventh failure case, and the same argument as `container_volumes`': a defect in a
+    boundary-widening key should be doctor-visible rather than surface mid-dispatch. The case
+    that motivates it is `container_cap_add = "SETUID"` — a bare string, which is iterable, so
+    a builder mapping entries to flags emits `--cap-add S --cap-add E …`.
+
+    Shape only. Whether `SETUID` is a capability name and `PATH` an environment variable name
+    is `bessemer.container`'s question, because that module owns the patterns and the flags
+    they end up in; a second copy here would be two definitions of one alphabet.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fixtures = 0
+
+    def refusal(self, key: str, value: str) -> Unresolved:
+        """Load an adapter whose `key` holds `value`, expecting a refusal.
+
+        Each call gets its own directory, named from a counter rather than from the value:
+        `hash` is seeded per interpreter, so directory names would differ run to run and a
+        failure would name a path nobody can reproduce.
+        """
+        self.fixtures += 1
+        adapter_root = self.tmp / f"{key}-{self.fixtures}"
+        self.make_adapter(adapter_root, {config.COMMITTED_FILE: f"{key} = {value}\n"})
+        loaded = config.load(start=adapter_root, env={})
+        assert isinstance(loaded, Unresolved), loaded
+        return loaded
+
+    def test_the_two_keys_checked_here_are_these_two(self) -> None:
+        """Hand-written, and deliberately not derived from `COMMITTED_ONLY_KEYS`: that set
+        holds the same three keys today for a different reason, and `container_volumes` is
+        checked one step earlier with a hint of its own."""
+        self.assertEqual(config.NAME_LIST_KEYS, ("container_env_keys", "container_cap_add"))
+
+    def test_a_bare_string_is_refused_for_either_key(self) -> None:
+        for key in config.NAME_LIST_KEYS:
+            with self.subTest(key=key):
+                refused = self.refusal(key, '"SETUID"')
+                self.assertIn(key, refused.reason)
+                self.assertIn("SETUID", refused.reason)
+                self.assertIn("list of strings", refused.reason)
+                self.assertTrue(refused.hint)
+
+    def test_an_entry_that_is_not_a_string_is_refused(self) -> None:
+        for key in config.NAME_LIST_KEYS:
+            with self.subTest(key=key):
+                self.assertIn("42", self.refusal(key, "[42]").reason)
+
+    def test_an_empty_entry_is_refused(self) -> None:
+        """An empty capability or variable name reaches docker as a flag with no value."""
+        for key in config.NAME_LIST_KEYS:
+            with self.subTest(key=key):
+                self.assertIn("empty", self.refusal(key, '[""]').reason)
+
+    def test_the_local_layer_is_checked_too_and_names_its_own_file(self) -> None:
+        """Being written in the layer that may not set the key is not a licence to be
+        ill-formed in it — the same rule `container_volumes` follows."""
+        self.make_adapter(self.tmp, {config.LOCAL_FILE: 'container_cap_add = "SETUID"\n'})
+        loaded = config.load(start=self.tmp, env={})
+        assert isinstance(loaded, Unresolved), loaded
+        self.assertIn(config.LOCAL_FILE, loaded.reason)
+
+    def test_both_keys_share_one_hint(self) -> None:
+        """One fix, one sentence: two hints that read alike are the collapse
+        `FailureCaseTest` exists to notice, and they would be two failure cases there."""
+        hints = {self.refusal(key, '"X"').hint for key in config.NAME_LIST_KEYS}
+        self.assertEqual(hints, {config.NAME_LIST_HINT})
+
+    def test_a_list_of_names_and_an_empty_list_are_both_accepted(self) -> None:
+        """The control. Without it every refusal above would pass against a loader that
+        refused both keys outright."""
+        self.make_adapter(
+            self.tmp,
+            {
+                config.COMMITTED_FILE: (
+                    'container_env_keys = ["DATABASE_URL"]\ncontainer_cap_add = []\n'
+                ),
+            },
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("container_env_keys"), ["DATABASE_URL"])
+        self.assertEqual(loaded.get("container_cap_add"), [])
+
 
 class KeyWiringTest(TreeTest):
     """One test per key F3 added, each exercising at least two layers.
@@ -1073,14 +1177,14 @@ A hard crash therefore shows up as a red build naming this file, not as lost cov
 
 
 class FailureCaseTest(TreeTest):
-    """The six ways `load` can fail, produced side by side and compared.
+    """The seven ways `load` can fail, produced side by side and compared.
 
     Each already has its own test above, and each of those asserts a substring. None of
     them can see that two cases have collapsed into the same wording — an `except` clause
     deleted, or two clauses given one shared hint, leaves every individual assertion green
     while a user reading the output can no longer tell which mistake they made.
 
-    The six are restated here by hand. On its own that closes the set against *collapse*
+    The seven are restated here by hand. On its own that closes the set against *collapse*
     and nothing else: `CASE_NAMES` was previously compared only against `cases()`, which is
     hand-written beside it, so the two agreed with each other while saying nothing about
     the module. A sixth `except PermissionError` clause with its own reason and hint was
@@ -1100,6 +1204,7 @@ class FailureCaseTest(TreeTest):
     CASE_NAMES = [
         "absorbed by the total clause",
         "invalid container_volumes",
+        "invalid name list",
         "not UTF-8",
         "not found",
         "unparseable TOML",
@@ -1107,10 +1212,16 @@ class FailureCaseTest(TreeTest):
     ]
     """Every way `load` can fail, sorted. Hand-written; see the class docstring.
 
-    The sixth is F3's, and it is the first failure here that is not about *reading* a file:
-    the TOML parses, and the loader refuses what it says. It shares the closure assertions
-    with the other five deliberately — a message that read like one of theirs would send a
-    user to fix an encoding or a syntax error in a file that has neither.
+    The sixth and seventh are F3's, and they are the first failures here that are not about
+    *reading* a file: the TOML parses, and the loader refuses what it says. They share the
+    closure assertions with the other five deliberately — a message that read like one of
+    theirs would send a user to fix an encoding or a syntax error in a file that has neither.
+
+    "invalid name list" is one case covering two keys (`container_env_keys` and
+    `container_cap_add`), because the fix is one fix: write a list of strings. Which key it
+    was is in the reason, and the shared `NAME_LIST_HINT` is why they do not count as two
+    cases that read alike. Added at issue 06, 2026-08-05 — the anchors below both fired on
+    the loader's new refusal, which is what they exist to do.
     """
 
     HANDLERS = [
@@ -1150,6 +1261,10 @@ class FailureCaseTest(TreeTest):
             self.tmp / "volumes",
             {config.COMMITTED_FILE: 'container_volumes = ["/etc:/etc"]\n'},
         )
+        names = self.make_adapter(
+            self.tmp / "names",
+            {config.COMMITTED_FILE: 'container_cap_add = "SETUID"\n'},
+        )
 
         starts = {
             "not found": no_adapter,
@@ -1158,6 +1273,7 @@ class FailureCaseTest(TreeTest):
             "unreadable": unreadable.parent,
             "absorbed by the total clause": nested.parent,
             "invalid container_volumes": volumes.parent,
+            "invalid name list": names.parent,
         }
         found: dict[str, Unresolved] = {}
         for name, start in starts.items():
@@ -1185,7 +1301,7 @@ class FailureCaseTest(TreeTest):
         """
         self.assertEqual(unresolved_sites(), len(self.CASE_NAMES))
 
-    def test_there_are_six_failure_cases_and_no_two_read_alike(self) -> None:
+    def test_there_are_seven_failure_cases_and_no_two_read_alike(self) -> None:
         cases = self.cases()
         self.assertEqual(sorted(cases), self.CASE_NAMES)
         pairs = [(outcome.reason, outcome.hint) for outcome in cases.values()]
@@ -1203,7 +1319,7 @@ class FailureCaseTest(TreeTest):
                 self.assertTrue(outcome.hint, name)
 
     def test_every_failure_about_a_file_names_that_file(self) -> None:
-        """The five file-shaped cases name `config.toml`; "not found" has no file to name
+        """The six file-shaped cases name `config.toml`; "not found" has no file to name
         and names the directory the walk started from instead."""
         cases = self.cases()
         for name in (
@@ -1212,6 +1328,7 @@ class FailureCaseTest(TreeTest):
             "unreadable",
             "absorbed by the total clause",
             "invalid container_volumes",
+            "invalid name list",
         ):
             with self.subTest(case=name):
                 self.assertIn(config.COMMITTED_FILE, cases[name].reason)
