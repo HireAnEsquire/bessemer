@@ -327,6 +327,20 @@ Five, settled before any issue was written.
    trusts the plan — alongside its existing duty to re-check liveness and salvage-fetch
    before each removal (in `run.sh` at the pin, lines 422–523).
 
+   **Correction, 2026-08-05 (F3 grill): the first and second debtor entries were assigned
+   to the wrong feature. The code, the tests, and the no-defaults rule are unchanged —
+   only who discharges the debt moves.** Entry 1's predicates (`local_exists`,
+   `remote_exists`) reach `_first_free_branch_name` only through `_branch_name_suggestion`,
+   whose only call sites at the pin are `tasklib.py:1757` (pick_branch prefill) and `:2148`
+   (cmd_pick's wizard branch step) — both picker, so the debt discharges at **F5**. One-off
+   dispatch never suggests a branch name: `run.sh:929` hard-errors on a missing branch via
+   a local-only `git show-ref --verify`, and the one branch-creation carve-out
+   (`run.sh:639–645`) belongs to the picker's y/N confirm. Entry 2's consumer is resume
+   dispatch, which ROADMAP assigns to **F4** with the rest of the resume family — "F3's
+   dispatch consumes it" was written wrong; the `source_dir` assertion lands with the F4
+   issue that consumes it. Entries 3 and 4 stay F3's; the same ruling corrected ROADMAP's
+   F5 line, which had contradicted this decision by listing `gc --force` under F5.
+
 ## Sequence
 
 `00` blocks everything. The four port issues are independent of each other and share only

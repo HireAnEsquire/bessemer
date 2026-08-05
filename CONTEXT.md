@@ -43,6 +43,12 @@ _Avoid_: worktree, clone (as a noun), workspace, sandbox
 **Container**:
 The per-run Docker container the agent executes inside, holding its own throwaway database.
 
+**Slug**:
+The branch-derived key naming a run's container, checkout, lock, and log
+(`bessemer-<slug>`, `checkouts/<slug>`, `locks/<slug>.pid`, `logs/<slug>.log`). The
+rendezvous identity that status and gc scan by.
+_Avoid_: id, name
+
 **Salvage**:
 Fast-forwarding the working branch in the main repository from a checkout, before that checkout is
 removed.
@@ -58,6 +64,11 @@ _Avoid_: feature branch, target branch, agent branch
 **Base**:
 The ref a run's pull request targets and diffs against. Never pushed to, never forked from.
 _Avoid_: parent, upstream, fork point
+
+**Landing**:
+The push-plus-pull-request step that ends a run; a run lands whatever is done, even when it
+stops early.
+_Avoid_: deliver, finalize
 
 ### The agent loop
 

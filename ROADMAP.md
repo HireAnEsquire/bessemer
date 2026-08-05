@@ -59,10 +59,13 @@ along here.
 
 Built by F3's dispatcher from this point on.
 
-### F5 — picker, gc, dry-run
+### F5 — picker and dry-run
 
-The picker, gc force paths, and dry-run parity. Two items fold in here that were pending at
-extraction time:
+The picker and dry-run parity. (`gc --force` was listed here originally; moved to F3, ruled
+2026-08-05 during the F3 grill — F2 README decision 9 wrote its gc suite-gap pins as
+prerequisites of an F3 issue, `bessemer/gc.py`'s docstring already said "force is F3's", and
+dogfooding starts at F3, where leaked artifacts first appear.) Two items fold in here that
+were pending at extraction time:
 
 - **Partial-flags picker** — flags supplied but incomplete (a feature named with no branch) drops
   into the picker with supplied values pre-resolved: their steps are skipped, the walk starts at
