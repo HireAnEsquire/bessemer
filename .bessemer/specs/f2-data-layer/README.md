@@ -100,18 +100,14 @@ Five, settled before any issue was written.
    whole of that test is the shim. Excluded, taking exclusions to **141** and pending to
    **196**.
 
-   Each remaining `cmd_*` class is judged the same way by its own issue. Settled so far:
+   Every `cmd_*` class is now judged; the full record:
 
-   - **Excluded as shims**: `feedback-edit-strip` (issue 01), and `ledger-append`,
-     `ledger-last-base` and `last` (issue 02). The last of those is the clearest case in the
-     feature — `run.sh:697` parses its output with `IFS='=' read -r`, so the `key=value`
+   - **Excluded as shims**: `feedback-edit-strip` (issue 01); `ledger-append`,
+     `ledger-last-base` and `last` (issue 02); `resume` and `resume-guard` (issue 03). The
+     clearest cases are the ones `run.sh` parses with `IFS='=' read -r` — the `key=value`
      format exists solely for bash to read.
-   - **Still open**: `status` and `gc`, which are commands a human types, and are therefore
-     the ones expected to split.
-
-   **`PORTED_SPLIT` has still never fired on real data.** Issue 04's `CmdStatusTests` or
-   issue 05's `CmdGcTests` will be the first, or it never fires at all — in which case the
-   path should be deleted rather than left as machinery nothing uses.
+   - **Split**: `status` (issue 04, the first firing) and `gc` (issue 05) — the two
+     commands a human types.
 
    **Excluding a shim must not drop behaviour.** A shim's tests sometimes assert real
    computation that no other class covers — argument-to-record mapping, for instance. Check
@@ -320,6 +316,16 @@ Five, settled before any issue was written.
    enforces the rendezvous yet: an F3 dispatch that writes anywhere else makes status render
    a healthy blank over live runs, which is the worst thing a status command can do. The F3
    issue that starts containers owns the round-trip test.
+
+   A fourth, from issue 05's review — **two gc properties no test in either repo pins, and
+   F3's deleter will trust both.** Measured by mutation against the full suite: (a) making
+   `live_slugs` include *stopped* containers stays green — no test asserts a checkout whose
+   container has exited is still an orphan; (b) `render_gc_plan`'s class filter is never
+   exercised alone, because the only unknown-class fixture item is also `deletable=False`.
+   Both fixtures are byte-identical with upstream's, so this is an inherited suite gap, not
+   drift. The F3 issue that implements `gc --force` must pin both before any `rm -rf`
+   trusts the plan — alongside its existing duty to re-check liveness and salvage-fetch
+   before each removal (in `run.sh` at the pin, lines 422–523).
 
 ## Sequence
 

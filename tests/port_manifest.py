@@ -367,6 +367,7 @@ LEDGER = "tests.test_ledger"
 RESUME = "tests.test_resume"
 STATUS = "tests.test_status"
 CLI = "tests.test_cli"
+GC = "tests.test_gc"
 
 
 # ---------------------------------------------------------------------------------------
@@ -931,48 +932,130 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "HumanSizeTests": (
-        pending("test_bytes"),
-        pending("test_kilobytes"),
-        pending("test_megabytes"),
-        pending("test_gigabytes"),
+        ported("test_bytes", Counterpart(GC, "test_bytes_render_without_a_decimal")),
+        ported("test_kilobytes", Counterpart(GC, "test_kilobytes_render_with_one_decimal")),
+        ported("test_megabytes", Counterpart(GC, "test_megabytes_render_with_one_decimal")),
+        ported("test_gigabytes", Counterpart(GC, "test_gigabytes_render_with_one_decimal")),
     ),
     "DirSizeTests": (
-        pending("test_sums_file_sizes_recursively"),
-        pending("test_missing_dir_is_zero"),
+        ported(
+            "test_sums_file_sizes_recursively",
+            Counterpart(GC, "test_file_sizes_are_summed_recursively"),
+        ),
+        ported(
+            "test_missing_dir_is_zero",
+            Counterpart(GC, "test_a_missing_directory_sizes_to_zero"),
+        ),
     ),
     "CollectGcItemsTests": (
-        pending("test_stopped_container_is_orphan_and_deletable"),
-        pending("test_running_container_is_excluded"),
-        pending("test_docker_down_excludes_containers_and_marks_undeletable"),
-        pending("test_checkout_with_no_live_container_is_orphan"),
-        pending("test_checkout_with_live_container_is_excluded"),
-        pending("test_checkout_with_live_lock_pid_is_excluded"),
-        pending("test_checkout_with_dead_lock_pid_is_still_orphan"),
-        pending("test_lock_with_dead_pid_and_no_container_is_orphan"),
-        pending("test_lock_with_live_pid_is_not_stale"),
-        pending("test_lock_with_live_container_excluded_even_if_pid_dead"),
-        pending("test_logs_are_never_items"),
+        ported(
+            "test_stopped_container_is_orphan_and_deletable",
+            Counterpart(GC, "test_a_stopped_container_is_an_orphan_and_deletable"),
+        ),
+        ported(
+            "test_running_container_is_excluded",
+            Counterpart(GC, "test_a_running_container_is_excluded"),
+        ),
+        ported(
+            "test_docker_down_excludes_containers_and_marks_undeletable",
+            Counterpart(
+                GC, "test_docker_down_excludes_containers_and_marks_everything_undeletable"
+            ),
+        ),
+        ported(
+            "test_checkout_with_no_live_container_is_orphan",
+            Counterpart(GC, "test_a_checkout_with_no_live_container_is_an_orphan"),
+        ),
+        ported(
+            "test_checkout_with_live_container_is_excluded",
+            Counterpart(GC, "test_a_checkout_with_a_live_container_is_excluded"),
+        ),
+        ported(
+            "test_checkout_with_live_lock_pid_is_excluded",
+            Counterpart(GC, "test_a_checkout_with_a_live_lock_pid_is_excluded"),
+        ),
+        ported(
+            "test_checkout_with_dead_lock_pid_is_still_orphan",
+            Counterpart(GC, "test_a_checkout_with_a_dead_lock_pid_is_still_an_orphan"),
+        ),
+        ported(
+            "test_lock_with_dead_pid_and_no_container_is_orphan",
+            Counterpart(GC, "test_a_lock_with_a_dead_pid_and_no_container_is_an_orphan"),
+        ),
+        ported(
+            "test_lock_with_live_pid_is_not_stale",
+            Counterpart(GC, "test_a_lock_with_a_live_pid_is_not_stale"),
+        ),
+        ported(
+            "test_lock_with_live_container_excluded_even_if_pid_dead",
+            Counterpart(
+                GC, "test_a_lock_with_a_live_container_is_excluded_even_with_a_dead_pid"
+            ),
+        ),
+        ported("test_logs_are_never_items", Counterpart(GC, "test_logs_are_never_items")),
     ),
     "SummarizeLogsTests": (
-        pending("test_counts_current_and_rotated_with_total_size"),
-        pending("test_no_rotated_omits_rotated_count"),
-        pending("test_empty_or_missing_dir_is_empty_string"),
+        ported(
+            "test_counts_current_and_rotated_with_total_size",
+            Counterpart(GC, "test_current_and_rotated_are_counted_with_a_total_size"),
+        ),
+        ported(
+            "test_no_rotated_omits_rotated_count",
+            Counterpart(GC, "test_no_rotated_logs_omits_the_rotated_count"),
+        ),
+        ported(
+            "test_empty_or_missing_dir_is_empty_string",
+            Counterpart(GC, "test_an_empty_or_missing_directory_summarizes_to_nothing"),
+        ),
     ),
     "RenderGcTests": (
-        pending("test_empty_items_nothing_to_reclaim"),
-        pending("test_log_summary_appended_with_and_without_items"),
-        pending("test_docker_down_adds_warning_header"),
-        pending("test_lists_item_fields"),
+        ported(
+            "test_empty_items_nothing_to_reclaim",
+            Counterpart(GC, "test_no_items_renders_nothing_to_reclaim"),
+        ),
+        ported(
+            "test_log_summary_appended_with_and_without_items",
+            Counterpart(GC, "test_the_log_summary_is_appended_with_and_without_items"),
+        ),
+        ported(
+            "test_docker_down_adds_warning_header",
+            Counterpart(GC, "test_docker_down_adds_the_warning_header"),
+        ),
+        ported("test_lists_item_fields", Counterpart(GC, "test_an_items_fields_are_listed")),
     ),
     "RenderGcPlanTests": (
-        pending("test_only_deletable_items_included"),
-        pending("test_empty_items_gives_empty_plan"),
+        ported(
+            "test_only_deletable_items_included",
+            Counterpart(GC, "test_only_deletable_items_of_known_classes_are_included"),
+        ),
+        ported(
+            "test_empty_items_gives_empty_plan",
+            Counterpart(GC, "test_no_items_gives_an_empty_plan"),
+        ),
     ),
     "CmdGcTests": (
-        pending("test_reads_docker_rows_from_stdin"),
-        pending("test_docker_down_does_not_read_stdin"),
-        pending("test_plan_flag_prints_tsv"),
-        pending("test_plan_flag_prints_nothing_when_empty"),
+        # Decision 5's second genuine split: `gc` is a subcommand a human types.
+        # Computation half in tests/test_gc.py, printing half in tests/test_cli.py.
+        split(
+            "test_reads_docker_rows_from_stdin",
+            Counterpart(GC, "test_docker_rows_handed_in_reach_the_rendered_scan"),
+            Counterpart(CLI, "test_the_rows_the_gather_returned_are_scanned_and_printed"),
+        ),
+        split(
+            "test_docker_down_does_not_read_stdin",
+            Counterpart(GC, "test_docker_down_ignores_rows_handed_in"),
+            Counterpart(CLI, "test_a_down_daemon_prints_the_listing_only_header_and_no_rows"),
+        ),
+        split(
+            "test_plan_flag_prints_tsv",
+            Counterpart(GC, "test_the_plan_for_a_stopped_container_is_one_tsv_line"),
+            Counterpart(CLI, "test_the_plan_flag_prints_the_tsv_plan"),
+        ),
+        split(
+            "test_plan_flag_prints_nothing_when_empty",
+            Counterpart(GC, "test_an_empty_scan_plans_nothing"),
+            Counterpart(CLI, "test_the_plan_flag_prints_nothing_when_there_is_nothing"),
+        ),
     ),
     "SetStatusTests": (
         ported(

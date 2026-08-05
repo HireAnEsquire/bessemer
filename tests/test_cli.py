@@ -2,6 +2,8 @@
 
 `CmdStatusTest` holds the printing halves of upstream's `CmdStatusTests`, split per
 decision 5 of the F2 README; the computation halves are in `tests/test_status.py`.
+`CmdGcTest` holds the printing halves of upstream's `CmdGcTests` the same way; the
+computation halves are in `tests/test_gc.py`.
 """
 
 import argparse
@@ -253,20 +255,97 @@ class DockerGatherTest(unittest.TestCase):
         self.assert_down_rendering(code, out)
 
 
+class CmdGcTest(unittest.TestCase):
+    """The printing half of upstream's `CmdGcTests` — what `bessemer gc` writes and exits
+    with. The computation half of each test is in `tests/test_gc.py`, per decision 5 of the
+    F2 README.
+
+    The same two seams as `CmdStatusTest`, for the same reasons: `cli._docker_rows` is the
+    counterpart of upstream's stdin (gc reuses status's gather rather than growing one of
+    its own, so the gather's failure collapse is already proven by `DockerGatherTest` and
+    there is nothing new to drive through `proc.run` here), and `cli._start` is the working
+    directory.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / ".bessemer" / "specs").mkdir(parents=True)
+
+    def run_gc(self, *argv: str, rows: list[str], docker_down: bool) -> tuple[int, str, str]:
+        with (
+            mock.patch.object(cli, "_docker_rows", return_value=(rows, docker_down)),
+            mock.patch.object(cli, "_start", return_value=self.root),
+        ):
+            return run_cli("gc", *argv)
+
+    @ported_from("CmdGcTests", "test_reads_docker_rows_from_stdin")
+    def test_the_rows_the_gather_returned_are_scanned_and_printed(self) -> None:
+        code, out, _ = self.run_gc(
+            rows=["bessemer-my-branch\tExited (0) 1 hour ago"], docker_down=False
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("my-branch", out)
+
+    @ported_from("CmdGcTests", "test_docker_down_does_not_read_stdin")
+    def test_a_down_daemon_prints_the_listing_only_header_and_no_rows(self) -> None:
+        code, out, _ = self.run_gc(
+            rows=["bessemer-my-branch\tExited (0) 1 hour ago"], docker_down=True
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("docker unavailable", out)
+        self.assertNotIn("my-branch", out)
+
+    @ported_from("CmdGcTests", "test_plan_flag_prints_tsv")
+    def test_the_plan_flag_prints_the_tsv_plan(self) -> None:
+        code, out, _ = self.run_gc(
+            "--plan", rows=["bessemer-my-branch\tExited (0) 1 hour ago"], docker_down=False
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "container\tmy-branch")
+
+    @ported_from("CmdGcTests", "test_plan_flag_prints_nothing_when_empty")
+    def test_the_plan_flag_prints_nothing_when_there_is_nothing(self) -> None:
+        code, out, _ = self.run_gc("--plan", rows=[], docker_down=False)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+
+    def test_no_adapter_refuses_on_stderr_before_asking_the_daemon(self) -> None:
+        """Bessemer's own, mirroring status's: everything gc scans lives under the adapter
+        directory, so with none there is nothing a docker answer could add. `_docker_rows`
+        is deliberately left unpatched — if the refusal did not come first, `tests/guard.py`
+        would fail this test by refusing the `docker` spawn."""
+        bare_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(bare_tmp.cleanup)
+        with mock.patch.object(cli, "_start", return_value=Path(bare_tmp.name)):
+            code, out, err = run_cli("gc")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("no .bessemer/ directory found", err)
+        self.assertIn("hint:", err)
+
+
 class SurfaceTest(unittest.TestCase):
-    def test_the_surface_is_exactly_doctor_and_status(self) -> None:
+    def test_the_surface_is_exactly_doctor_status_and_gc(self) -> None:
         """A subcommand that exists but does nothing is a lie about what bessemer does.
 
         Hand-written, so growing the surface costs a deliberate edit here: `{doctor}` since
-        issue 06 of F1, `{doctor, status}` since issue 04 of F2 — the two commands a human
-        types today, and nothing else."""
-        self.assertEqual(subcommand_names(), ["doctor", "status"])
+        issue 06 of F1, `{doctor, status}` since issue 04 of F2, `{doctor, status, gc}`
+        since issue 05 — the three commands a human types today, and nothing else."""
+        self.assertEqual(subcommand_names(), ["doctor", "status", "gc"])
 
     def test_help_lists_every_subcommand(self) -> None:
         code, out, _ = run_cli("--help")
         self.assertEqual(code, 0)
         self.assertIn("doctor", out)
         self.assertIn("status", out)
+        self.assertIn("gc", out)
 
     def test_no_subcommand_prints_usage_and_exits_two(self) -> None:
         """F5's picker will claim this slot; this test is expected to change then."""

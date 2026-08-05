@@ -17,6 +17,7 @@ from typing import Final
 
 from bessemer import __version__, config, proc
 from bessemer import doctor as doctor_ops
+from bessemer import gc as gc_ops
 from bessemer import status as status_ops
 from bessemer.config import Config
 from bessemer.doctor import CheckResult
@@ -121,10 +122,11 @@ def _docker_rows() -> tuple[list[str], bool]:
     return result.stdout.splitlines(), False
 
 
-def _refuse(reason: str, hint: str) -> int:
+def _refuse(command: str, reason: str, hint: str) -> int:
     """A caller-error refusal: both halves on stderr, exit 2 — the usage-error exit argparse
-    already gives this CLI, and the code upstream's subcommands used for the same class."""
-    print(f"status: {reason}", file=sys.stderr)
+    already gives this CLI, and the code upstream's subcommands used for the same class.
+    Prefixed with the subcommand refusing, since two of them now share this path."""
+    print(f"{command}: {reason}", file=sys.stderr)
     print(f"{HINT_PREFIX}{hint}", file=sys.stderr)
     return 2
 
@@ -134,6 +136,7 @@ def _status_report(cfg: Config, limit: int) -> int:
     specs_setting = cfg.get("specs_dir")
     if not isinstance(specs_setting, str):
         return _refuse(
+            "status",
             f"specs_dir is configured to {specs_setting!r}, which is not a string",
             f"fix specs_dir in {cfg.adapter_dir / config.COMMITTED_FILE}",
         )
@@ -162,7 +165,48 @@ def status(args: argparse.Namespace) -> int:
         case Resolved(value=cfg):
             return _status_report(cfg, limit=args.limit)
         case Unresolved(reason=reason, hint=hint):
-            return _refuse(reason, hint)
+            return _refuse("status", reason, hint)
+
+
+def _gc_report(cfg: Config, plan: bool) -> int:
+    """Gather the docker-side facts, scan, and print the report — or the TSV plan.
+
+    The gather is `_docker_rows`, the same one `status` uses, rather than a second of its
+    own: upstream's `cmd_gc` read stdin because `run.sh` piped `docker ps` in from bash, and
+    that boundary is the one the rewrite deletes. Reusing the gather means its three failure
+    arms (nonzero exit, `OSError`, a hang) are already proven to collapse to docker-down by
+    `DockerGatherTest`, and gc renders that as `collect_gc_items` says it must: no container
+    class, nothing deletable.
+    """
+    docker_rows, docker_down = _docker_rows()
+    items = gc_ops.collect_gc_items(
+        checkouts_dir=cfg.adapter_dir / gc_ops.CHECKOUTS_DIR,
+        locks_dir=cfg.adapter_dir / status_ops.LOCKS_DIR,
+        docker_rows=docker_rows,
+        docker_down=docker_down,
+    )
+    if plan:
+        rendered = gc_ops.render_gc_plan(items)
+        if rendered:
+            print(rendered)
+    else:
+        log_summary = gc_ops.summarize_logs(cfg.adapter_dir / status_ops.LOGS_DIR)
+        print(gc_ops.render_gc(items, docker_down, log_summary))
+    return 0
+
+
+def gc(args: argparse.Namespace) -> int:
+    """Report what old run state could be reclaimed. Scans and says; deletes nothing —
+    `bessemer/gc.py`'s module docstring carries the reasoning, and F3 owns the acting.
+
+    Same shape as `status`: the adapter is resolved first, and a failure refuses before the
+    daemon is ever asked — the checkouts, locks and logs gc scans all live under it.
+    """
+    match config.load(start=_start()):
+        case Resolved(value=cfg):
+            return _gc_report(cfg, plan=args.plan)
+        case Unresolved(reason=reason, hint=hint):
+            return _refuse("gc", reason, hint)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +246,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="how many recent runs to show (default: %(default)s)",
     )
     status_parser.set_defaults(handler=status)
+
+    gc_parser = subcommands.add_parser(
+        "gc",
+        help="report what old run state could be reclaimed (scans only, deletes nothing)",
+        description="Report what old run state could be reclaimed. Deletes nothing.",
+    )
+    gc_parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="print the reclaimable items as machine-readable TSV instead of a table",
+    )
+    gc_parser.set_defaults(handler=gc)
 
     return parser
 
