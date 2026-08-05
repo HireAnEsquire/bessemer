@@ -521,17 +521,19 @@ class KnownKeyTest(TreeTest):
 
     def test_an_unrecognised_key_in_a_file_is_reported_and_not_rejected(self) -> None:
         """The core is pinned by a committed ref, so an older core reads a newer config
-        file routinely. Erroring would turn F3's `container_env_keys` into a hard failure
-        for everyone who had not yet bumped the pin."""
+        file routinely. Erroring would have turned F3's `container_env_keys` into a hard
+        failure for everyone who had not yet bumped the pin — and `notify`, F4's
+        notification verbosity, is the next key with that shape, which is why the fixture
+        moved to it rather than to an invented name."""
         self.make_adapter(
             self.tmp,
             {
-                config.COMMITTED_FILE: 'base = "main"\ncontainer_env_keys = ["FOO"]\n',
+                config.COMMITTED_FILE: 'base = "main"\nnotify = "steps"\n',
                 config.LOCAL_FILE: "model = 42\n",
             },
         )
         loaded = self.load(self.tmp)
-        self.assertEqual(loaded.unknown_keys(), ("container_env_keys", "model"))
+        self.assertEqual(loaded.unknown_keys(), ("model", "notify"))
         self.assertEqual(loaded.get("base"), "main")
 
     def test_an_adapter_using_only_known_keys_reports_none(self) -> None:
@@ -540,24 +542,74 @@ class KnownKeyTest(TreeTest):
 
 
 class SchemaTest(unittest.TestCase):
-    """The key set and its defaults, restated by hand.
+    """The key set, its defaults, and the committed-only rule, restated by hand.
 
-    Deliberately literals rather than assertions against `config.KNOWN_KEYS` and
-    `config.DEFAULTS`. A test that reads the thing it checks cannot notice that thing
-    changing: `KNOWN_KEYS |= {"image"}` and `DEFAULTS = {"specs_dir": "specs"}` both survive
-    a derived assertion with every other test still green.
+    Deliberately literals rather than assertions against `config.KNOWN_KEYS`,
+    `config.DEFAULTS` and `config.COMMITTED_ONLY_KEYS`. A test that reads the thing it
+    checks cannot notice that thing changing: `KNOWN_KEYS |= {"image"}` and
+    `DEFAULTS = {"specs_dir": "specs"}` both survive a derived assertion with every other
+    test still green.
 
     That matters beyond tidiness. This issue owns the schema and issue 07's adapter conforms
     to it, so a key appearing here without a consumer is a claim that bessemer is configured
     by something it never looks at — and it appears silently, which is the half a derived
-    assertion cannot see. Adding a key is meant to cost a deliberate edit in this file.
+    assertion cannot see. Adding a key is meant to cost a deliberate edit in this file: F3
+    decision 8.6 calls the growth from three keys to eleven a two-file edit *by design*, and
+    this is the second file.
+
+    The committed-only set gets the same treatment for a sharper reason. It is the layer
+    rule protecting a privilege boundary (ADR 0001's `container_env_keys` paragraph, and
+    F3 decisions 5.2 and 5.3 for the other two), so a key silently dropping out of it is a
+    boundary a `config.local.toml` can widen on one machine with no reviewable diff. Derived
+    from `KNOWN_KEYS` it would be unfalsifiable; written out it costs an edit.
     """
 
-    def test_the_loader_reads_exactly_these_three_keys(self) -> None:
-        self.assertEqual(set(config.KNOWN_KEYS), {"source", "base", "specs_dir"})
+    KEYS = {
+        "source",
+        "base",
+        "specs_dir",
+        "image",
+        "container_env_keys",
+        "container_cap_add",
+        "container_volumes",
+        "max_review_rounds",
+        "pass_timeout",
+        "pids_limit",
+        "memory",
+    }
+    """Every key the loader reads, hand-written. F1's three plus F3's eight."""
 
-    def test_specs_dir_is_the_only_key_with_a_default_and_this_is_its_value(self) -> None:
-        self.assertEqual(dict(config.DEFAULTS), {"specs_dir": ".bessemer/specs"})
+    def test_the_loader_reads_exactly_these_eleven_keys(self) -> None:
+        self.assertEqual(set(config.KNOWN_KEYS), self.KEYS)
+
+    def test_these_are_the_defaults_and_their_values(self) -> None:
+        """The whole mapping, not a membership check per key: a comparison that only asks
+        "is `memory` in there" cannot see `8g` becoming `8m`, and the limits are the two
+        keys where a wrong default is a security posture nobody chose (ADR 0001)."""
+        self.assertEqual(
+            dict(config.DEFAULTS),
+            {
+                "specs_dir": ".bessemer/specs",
+                "container_env_keys": [],
+                "container_cap_add": [],
+                "container_volumes": [],
+                "max_review_rounds": 3,
+                "pass_timeout": 900,
+                "pids_limit": 2048,
+                "memory": "8g",
+            },
+        )
+
+    def test_exactly_these_three_keys_are_committed_layer_only(self) -> None:
+        self.assertEqual(
+            set(config.COMMITTED_ONLY_KEYS),
+            {"container_env_keys", "container_cap_add", "container_volumes"},
+        )
+
+    def test_every_committed_only_key_is_a_key_this_loader_reads(self) -> None:
+        """A committed-only key the loader does not read would be a rule about nothing —
+        and `get` would raise on it, so nothing could ever check the rule was kept."""
+        self.assertLessEqual(set(config.COMMITTED_ONLY_KEYS), set(config.KNOWN_KEYS))
 
     def test_base_has_no_default(self) -> None:
         """Stated separately because it is load-bearing rather than incidental: defaults sit
@@ -569,6 +621,393 @@ class SchemaTest(unittest.TestCase):
         """Bessemer cannot guess which ref a team pinned, and inventing one would send a
         run at a version nobody chose."""
         self.assertNotIn("source", config.DEFAULTS)
+
+    def test_image_has_no_default(self) -> None:
+        """Also load-bearing rather than incidental. An absent `image` is a doctor FAIL and
+        a dispatch hard error (F3 issues 09 and 10); a default here — `bessemer-agent`, say
+        — would replace that named refusal with `docker run` failing on an image the adopter
+        never built, which is the same mistake reported worse and later."""
+        self.assertNotIn("image", config.DEFAULTS)
+
+
+class CommittedOnlyKeyTest(TreeTest):
+    """The three container keys, and what happens when a layer that may not set them does.
+
+    The rule is ADR 0001's, written for `container_env_keys` and applying verbatim to
+    `container_cap_add` (F3 decision 5.2) and `container_volumes` (5.3): widening a
+    container boundary must be a reviewable diff, and a gitignored `config.local.toml`
+    erases exactly that property, silently, on one machine.
+
+    Three layers, three different answers, and they are different on purpose:
+
+    - **local** — a user's mistake, so it is *data*. Doctor renders it FAIL (issue 09),
+      dispatch hard-errors on the same value (issue 10), neither reimplements the check
+      (ADR 0002's resolver discipline).
+    - **environment** — structurally unreachable, the same way `BESSEMER_ROOT` is: the env
+      layer is built from a key set, and these keys are not in it. A rule enforced by
+      construction cannot be forgotten by whoever adds the next key.
+    - **flags** — bessemer's own code calling bessemer, so it raises. A `--container-volumes`
+      flag would be a defect in this package, and the module's split is that a user's
+      mistake is a value and ours is an exception.
+    """
+
+    VALUES = {
+        "container_env_keys": '["DATABASE_URL"]',
+        "container_cap_add": '["SETUID"]',
+        # A *legal* volume, deliberately: the violation under test is the layer, and a
+        # fixture that was also malformed would fail the load and prove nothing about it.
+        "container_volumes": '["cache:/cache"]',
+    }
+    """Each committed-only key with a value its own rules accept."""
+
+    def test_a_committed_only_key_in_the_local_layer_is_reported(self) -> None:
+        for key, value in self.VALUES.items():
+            with self.subTest(key=key):
+                adapter_root = self.tmp / key
+                self.make_adapter(adapter_root, {config.LOCAL_FILE: f"{key} = {value}\n"})
+                self.assertEqual(self.load(adapter_root).committed_only_violations(), (key,))
+
+    def test_the_same_key_in_the_committed_layer_is_no_violation(self) -> None:
+        """The other half, and the one that makes the test above mean something: an
+        implementation that reported the key wherever it appeared would pass the first
+        assertion while refusing the only layer allowed to set it."""
+        for key, value in self.VALUES.items():
+            with self.subTest(key=key):
+                adapter_root = self.tmp / key
+                self.make_adapter(adapter_root, {config.COMMITTED_FILE: f"{key} = {value}\n"})
+                self.assertEqual(self.load(adapter_root).committed_only_violations(), ())
+
+    def test_an_adapter_that_sets_none_of_them_reports_nothing(self) -> None:
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'base = "main"\n'})
+        self.assertEqual(self.load(self.tmp).committed_only_violations(), ())
+
+    def test_all_three_are_reported_together_and_sorted(self) -> None:
+        """Doctor renders one FAIL line per key (issue 09), so it needs all of them rather
+        than the first — and in an order that does not depend on how TOML happened to be
+        written, or the rendered output moves between runs."""
+        self.make_adapter(
+            self.tmp,
+            {
+                config.LOCAL_FILE: (
+                    'container_volumes = ["cache:/cache"]\n'
+                    'container_cap_add = ["SETUID"]\n'
+                    'container_env_keys = ["DATABASE_URL"]\n'
+                ),
+            },
+        )
+        self.assertEqual(
+            self.load(self.tmp).committed_only_violations(),
+            ("container_cap_add", "container_env_keys", "container_volumes"),
+        )
+
+    def test_the_local_value_still_wins_rather_than_being_silently_dropped(self) -> None:
+        """The loader reports the violation; it does not resolve around it.
+
+        Dropping the local value here would leave a user staring at an override that looks
+        ignored, and it would make the violation fact inert — the run would proceed on the
+        committed value with nothing refusing it. Refusing is doctor's and dispatch's job,
+        and both have the fact they need to do it.
+        """
+        self.make_adapter(
+            self.tmp,
+            {
+                config.COMMITTED_FILE: 'container_env_keys = ["FROM_COMMITTED"]\n',
+                config.LOCAL_FILE: 'container_env_keys = ["FROM_LOCAL"]\n',
+            },
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("container_env_keys"), ["FROM_LOCAL"])
+        self.assertEqual(loaded.layer_of("container_env_keys"), config.LOCAL)
+        self.assertEqual(loaded.committed_only_violations(), ("container_env_keys",))
+
+    def test_no_environment_variable_can_set_a_committed_only_key(self) -> None:
+        """Structural, like `BESSEMER_ROOT`. Asserted against a committed value it would
+        have to beat, so this fails if the env layer ever starts carrying these keys —
+        `BESSEMER_CONTAINER_ENV_KEYS=AWS_SECRET_ACCESS_KEY` is the widening the rule exists
+        to make reviewable, and an env var is less reviewable than the local file it is
+        forbidden from.
+        """
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'container_cap_add = ["KILL"]\n'})
+        loaded = self.load(
+            self.tmp,
+            env={
+                "BESSEMER_CONTAINER_CAP_ADD": "SYS_ADMIN",
+                "BESSEMER_CONTAINER_ENV_KEYS": "AWS_SECRET_ACCESS_KEY",
+                "BESSEMER_CONTAINER_VOLUMES": "/:/host",
+            },
+        )
+        self.assertEqual(dict(loaded.env), {})
+        self.assertEqual(loaded.get("container_cap_add"), ["KILL"])
+        self.assertEqual(loaded.layer_of("container_cap_add"), config.COMMITTED)
+
+    def test_a_flag_naming_a_committed_only_key_raises(self) -> None:
+        """Loud rather than structured, for the same reason an unknown flag name is: no
+        such flag exists (F3's flag set is `<spec>`, `--branch`, `--base`), so one arriving
+        is bessemer's bug and must not be reported as a user's."""
+        self.make_adapter(self.tmp)
+        for key in self.VALUES:
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    config.load(start=self.tmp, env={}, flags={key: ["X"]})
+
+
+class ContainerVolumeTest(TreeTest):
+    """`container_volumes` entries, checked at load rather than at `docker run`.
+
+    Two forms and nothing else: `name:/path` (a named volume) and `/path` (anonymous). A
+    source beginning with `/` or `.` is a host bind, and no host path may cross into the
+    container through config (F3 decision 5.3) — the whole point of naming volumes in a
+    reviewable committed file is lost if `../..:/` is one of the things that can be named.
+
+    Checked here rather than in `container.py` so the defect is doctor-visible instead of
+    surfacing mid-dispatch, with a checkout cloned and a container half-started.
+    """
+
+    def refusal(self, entry: str, filename: str = config.COMMITTED_FILE) -> Unresolved:
+        """Load an adapter whose `container_volumes` holds `entry`, expecting a refusal."""
+        adapter_root = self.tmp / entry.replace("/", "_").replace(".", "_")
+        self.make_adapter(adapter_root, {filename: f"container_volumes = [{entry!r}]\n"})
+        loaded = config.load(start=adapter_root, env={})
+        assert isinstance(loaded, Unresolved), loaded
+        return loaded
+
+    def test_a_named_volume_and_an_anonymous_path_are_both_accepted(self) -> None:
+        """The control for every refusal below. Without it they would all pass against a
+        loader that refused the key outright."""
+        self.make_adapter(
+            self.tmp,
+            {
+                config.COMMITTED_FILE: (
+                    'container_volumes = ["cache:/yarn-cache", "/workspace/node_modules"]\n'
+                ),
+            },
+        )
+        self.assertEqual(
+            self.load(self.tmp).get("container_volumes"),
+            ["cache:/yarn-cache", "/workspace/node_modules"],
+        )
+
+    def test_a_relative_host_source_is_refused_with_a_message_naming_the_rule(self) -> None:
+        refused = self.refusal("../x:/y")
+        self.assertIn(config.COMMITTED_FILE, refused.reason)
+        self.assertIn("../x:/y", refused.reason)
+        self.assertIn("container_volumes", refused.reason)
+        # The rule, not merely "invalid": a user who wrote `../x:/y` meant to mount a host
+        # directory, and needs to be told that config cannot do that rather than that they
+        # mistyped something.
+        self.assertIn("/", refused.hint)
+        self.assertIn("host", refused.reason + refused.hint)
+
+    def test_an_absolute_host_source_is_refused_the_same_way(self) -> None:
+        refused = self.refusal("/host:/y")
+        self.assertIn("/host:/y", refused.reason)
+        self.assertIn("host", refused.reason + refused.hint)
+
+    def test_the_local_layer_is_checked_too_and_names_its_own_file(self) -> None:
+        """A committed-only key is still checked in the layer that may not set it. The
+        violation fact says *where* it was set; it does not excuse *what* was set, and a
+        loader that skipped the check here would accept `/:/host` from the one layer nobody
+        reviews.
+        """
+        refused = self.refusal("/:/host", filename=config.LOCAL_FILE)
+        self.assertIn(config.LOCAL_FILE, refused.reason)
+        self.assertNotIn(f"/{config.COMMITTED_FILE}", refused.reason)
+
+    def test_a_source_that_is_a_path_in_disguise_is_refused(self) -> None:
+        """The hole a leading-character test leaves open, and the reason the source is
+        matched against a volume-name pattern instead.
+
+        Docker reads any source containing a `/` as a path, so `sub/dir:/y` is a host bind
+        that starts with neither `/` nor `.` — it would have passed a check written to keep
+        host paths out of config and arrived at issue 06's mount table as an entry this
+        module had declared legal. `~/secrets` is the same shape with the leading character
+        a shell would have expanded.
+        """
+        for entry in ("sub/dir:/y", "~/secrets:/y", "a b:/y", "-x:/y"):
+            with self.subTest(entry=entry):
+                refused = self.refusal(entry)
+                self.assertIn(repr(entry), refused.reason)
+                self.assertIn("volume name", refused.reason)
+
+    def test_the_other_malformed_entries_are_refused_and_name_themselves(self) -> None:
+        """One shape per rule, each asserted to quote the entry that caused it: a message
+        that named only the key would send the reader to read a whole list by eye.
+
+        `cache:relative` and `cache:/a:/b` are not host binds — they are the forms docker
+        would reject later, or accept as something the two documented forms do not cover
+        (`:ro`, `:z`). Refusing them here keeps the accepted set exactly the two the
+        decision names, rather than "the two, plus whatever docker tolerates".
+        """
+        for entry in ("relative", "cache:relative", "cache:/a:/b", ":/mount", ""):
+            with self.subTest(entry=entry):
+                refused = self.refusal(entry)
+                self.assertIn(repr(entry), refused.reason)
+                self.assertTrue(refused.hint)
+
+    def test_a_container_volumes_value_that_is_not_a_list_is_refused(self) -> None:
+        """TOML lets `container_volumes = "cache:/cache"` through as a string, and a string
+        is iterable — a check that walked it without this would validate one character at a
+        time and refuse the letter `c` for not being an absolute path."""
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'container_volumes = "c:/c"\n'})
+        loaded = config.load(start=self.tmp, env={})
+        assert isinstance(loaded, Unresolved), loaded
+        self.assertIn("container_volumes", loaded.reason)
+        self.assertTrue(loaded.hint)
+
+    def test_an_entry_that_is_not_a_string_is_refused(self) -> None:
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: "container_volumes = [42]\n"})
+        loaded = config.load(start=self.tmp, env={})
+        assert isinstance(loaded, Unresolved), loaded
+        self.assertIn("42", loaded.reason)
+
+    def test_an_empty_list_is_accepted(self) -> None:
+        """The default spelled out in a file, which an adapter generator would plausibly
+        write. Refusing it would make the default unwritable."""
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: "container_volumes = []\n"})
+        self.assertEqual(self.load(self.tmp).get("container_volumes"), [])
+
+
+class KeyWiringTest(TreeTest):
+    """One test per key F3 added, each exercising at least two layers.
+
+    The precedence chain itself is `PrecedenceTest`'s subject and is not re-proven eleven
+    times here. What these cover is narrower and not implied by it: that each key is
+    actually wired into the chain rather than merely present in `KNOWN_KEYS`. A key in the
+    set with no layer reading it reads as `None` forever, which is the "configured to
+    nothing" failure `_require_known` exists to prevent arriving by another door.
+
+    The five any-layer keys are driven from the layers a user would plausibly use for them
+    — `image` from the environment (a developer testing a rebuilt image), the loop limits
+    from `config.local.toml` (ADR 0001 names machine limits as the local-layer example).
+    The three committed-only keys are driven from the committed layer against their
+    defaults, because those are the only two layers open to them.
+    """
+
+    def test_image_is_read_from_the_committed_layer_and_the_environment(self) -> None:
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'image = "bessemer-agent"\n'})
+        self.assertEqual(self.load(self.tmp).get("image"), "bessemer-agent")
+        loaded = self.load(self.tmp, env={"BESSEMER_IMAGE": "bessemer-agent:wip"})
+        self.assertEqual(loaded.get("image"), "bessemer-agent:wip")
+        self.assertEqual(loaded.layer_of("image"), config.ENV)
+
+    def test_an_adapter_that_sets_no_image_reads_as_none(self) -> None:
+        """No default, so this is what doctor FAILs on and dispatch hard-errors on."""
+        self.make_adapter(self.tmp)
+        self.assertIsNone(self.load(self.tmp).get("image"))
+
+    def test_max_review_rounds_is_read_from_local_over_committed_and_defaults(self) -> None:
+        self.make_adapter(
+            self.tmp,
+            {
+                config.COMMITTED_FILE: "max_review_rounds = 5\n",
+                config.LOCAL_FILE: "max_review_rounds = 1\n",
+            },
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("max_review_rounds"), 1)
+        self.assertEqual(loaded.layer_of("max_review_rounds"), config.LOCAL)
+        bare = self.make_adapter(self.tmp / "bare").parent
+        self.assertEqual(self.load(bare).get("max_review_rounds"), 3)
+
+    def test_pass_timeout_is_read_from_the_environment_over_committed(self) -> None:
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: "pass_timeout = 1200\n"})
+        self.assertEqual(self.load(self.tmp).get("pass_timeout"), 1200)
+        loaded = self.load(self.tmp, env={"BESSEMER_PASS_TIMEOUT": "60"})
+        # A string, deliberately: the environment carries text and this loader does no
+        # coercion. Recorded here rather than left to be discovered by issue 07, which owns
+        # what `pass_timeout` means to `timeout(1)`.
+        self.assertEqual(loaded.get("pass_timeout"), "60")
+        self.assertEqual(loaded.layer_of("pass_timeout"), config.ENV)
+
+    def test_pids_limit_is_read_from_a_flag_over_local(self) -> None:
+        """ADR 0001 requires the limit; ADR 0001's config section names machine limits as a
+        local-layer example, so the local layer is where a user would set it.
+
+        The flag layer here is the loader's mechanism, not a claim that `--pids-limit`
+        exists — F3's flag set is `<spec>`, `--branch`, `--base` (decision 4). What it
+        proves is that this key is wired into the chain at the top as well as the bottom,
+        which is the half `layer_of` against one layer cannot show.
+        """
+        self.make_adapter(self.tmp, {config.LOCAL_FILE: "pids_limit = 4096\n"})
+        self.assertEqual(self.load(self.tmp).get("pids_limit"), 4096)
+        loaded = self.load(self.tmp, flags={"pids_limit": 512})
+        self.assertEqual(loaded.get("pids_limit"), 512)
+        self.assertEqual(loaded.layer_of("pids_limit"), config.FLAG)
+
+    def test_memory_is_read_from_local_over_committed_and_defaults(self) -> None:
+        self.make_adapter(
+            self.tmp,
+            {config.COMMITTED_FILE: 'memory = "16g"\n', config.LOCAL_FILE: 'memory = "4g"\n'},
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("memory"), "4g")
+        self.assertEqual(loaded.layer_of("memory"), config.LOCAL)
+        bare = self.make_adapter(self.tmp / "bare").parent
+        self.assertEqual(self.load(bare).get("memory"), "8g")
+
+    def test_container_env_keys_is_read_from_the_committed_layer(self) -> None:
+        self.make_adapter(
+            self.tmp,
+            {config.COMMITTED_FILE: 'container_env_keys = ["DATABASE_URL", "REDIS_URL"]\n'},
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("container_env_keys"), ["DATABASE_URL", "REDIS_URL"])
+        self.assertEqual(loaded.layer_of("container_env_keys"), config.COMMITTED)
+
+    def test_container_cap_add_is_read_from_the_committed_layer(self) -> None:
+        self.make_adapter(
+            self.tmp,
+            {config.COMMITTED_FILE: 'container_cap_add = ["CHOWN", "SETUID"]\n'},
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("container_cap_add"), ["CHOWN", "SETUID"])
+        self.assertEqual(loaded.layer_of("container_cap_add"), config.COMMITTED)
+
+    def test_container_volumes_is_read_from_the_committed_layer(self) -> None:
+        self.make_adapter(
+            self.tmp,
+            {config.COMMITTED_FILE: 'container_volumes = ["cache:/yarn-cache"]\n'},
+        )
+        loaded = self.load(self.tmp)
+        self.assertEqual(loaded.get("container_volumes"), ["cache:/yarn-cache"])
+        self.assertEqual(loaded.layer_of("container_volumes"), config.COMMITTED)
+
+    def test_the_three_container_keys_default_to_empty_and_the_limits_to_theirs(self) -> None:
+        """The other layer for the committed-only three: an adapter that sets none of them
+        gets an empty list rather than `None`, so issue 06's builders iterate rather than
+        branch on `None` before every mount and every capability."""
+        self.make_adapter(self.tmp)
+        loaded = self.load(self.tmp)
+        for key in ("container_env_keys", "container_cap_add", "container_volumes"):
+            with self.subTest(key=key):
+                self.assertEqual(loaded.get(key), [])
+                self.assertEqual(loaded.layer_of(key), config.DEFAULT)
+        for key, default in (("pids_limit", 2048), ("memory", "8g")):
+            with self.subTest(key=key):
+                self.assertEqual(loaded.get(key), default)
+                self.assertEqual(loaded.layer_of(key), config.DEFAULT)
+
+    def test_a_caller_that_mutates_a_list_value_cannot_poison_the_next_load(self) -> None:
+        """Three of F3's defaults are empty lists, and they live at module level.
+
+        Without the copy in `get`, what a caller receives *is* `DEFAULTS["container_cap_add"]`
+        — so one caller appending a capability to the list it got would widen the default
+        capability set for every later load in the process, including every later test in
+        this suite. A privilege boundary that a stray `append` can move is not a boundary,
+        and the failure would surface as an unrelated test failing somewhere else.
+
+        Asserted on both a defaulted key and a file-supplied one: the parsed TOML layer is
+        shared for the lifetime of one `Config`, so it has the same shape of hazard.
+        """
+        self.make_adapter(self.tmp, {config.COMMITTED_FILE: 'container_env_keys = ["A"]\n'})
+        for key, expected in (("container_cap_add", []), ("container_env_keys", ["A"])):
+            with self.subTest(key=key):
+                loaded = self.load(self.tmp)
+                first = loaded.get(key)
+                assert isinstance(first, list), first
+                first.append("SYS_ADMIN")
+                self.assertEqual(loaded.get(key), expected)
+                self.assertEqual(self.load(self.tmp).get(key), expected)
 
 
 class SourceKeyTest(TreeTest):
@@ -588,8 +1027,9 @@ class SourceKeyTest(TreeTest):
         self.assertEqual(loaded.layer_of("source"), config.COMMITTED)
 
     def test_the_local_layer_can_override_the_source_pin(self) -> None:
-        """Not forbidden here: `container_env_keys` is the one committed-only key, and it
-        lands in F3. A dev pointing at a local core build is the case this serves."""
+        """Not forbidden here: the committed-only keys are the three container ones
+        (`CommittedOnlyKeyTest`), and `source` is not among them. A dev pointing at a local
+        core build is the case this serves."""
         self.make_adapter(
             self.tmp,
             {
@@ -633,14 +1073,14 @@ A hard crash therefore shows up as a red build naming this file, not as lost cov
 
 
 class FailureCaseTest(TreeTest):
-    """The five ways `load` can fail, produced side by side and compared.
+    """The six ways `load` can fail, produced side by side and compared.
 
     Each already has its own test above, and each of those asserts a substring. None of
     them can see that two cases have collapsed into the same wording — an `except` clause
     deleted, or two clauses given one shared hint, leaves every individual assertion green
     while a user reading the output can no longer tell which mistake they made.
 
-    The five are restated here by hand. On its own that closes the set against *collapse*
+    The six are restated here by hand. On its own that closes the set against *collapse*
     and nothing else: `CASE_NAMES` was previously compared only against `cases()`, which is
     hand-written beside it, so the two agreed with each other while saying nothing about
     the module. A sixth `except PermissionError` clause with its own reason and hint was
@@ -659,12 +1099,19 @@ class FailureCaseTest(TreeTest):
 
     CASE_NAMES = [
         "absorbed by the total clause",
+        "invalid container_volumes",
         "not UTF-8",
         "not found",
         "unparseable TOML",
         "unreadable",
     ]
-    """Every way `load` can fail, sorted. Hand-written; see the class docstring."""
+    """Every way `load` can fail, sorted. Hand-written; see the class docstring.
+
+    The sixth is F3's, and it is the first failure here that is not about *reading* a file:
+    the TOML parses, and the loader refuses what it says. It shares the closure assertions
+    with the other five deliberately — a message that read like one of theirs would send a
+    user to fix an encoding or a syntax error in a file that has neither.
+    """
 
     HANDLERS = [
         "FileNotFoundError",
@@ -675,10 +1122,10 @@ class FailureCaseTest(TreeTest):
     ]
     """Every `except` clause in `_read_layer`, as written and in order. Hand-written.
 
-    Five handlers and five cases is a coincidence of arithmetic, not a correspondence, and
-    the two lists must not be tied together: `FileNotFoundError` produces no failure at all
-    — an absent layer is an empty layer — and the "not found" case comes from `load`, which
-    has no handler. They are asserted separately for that reason.
+    Five handlers and six cases: the lists are not tied together, and never were.
+    `FileNotFoundError` produces no failure at all — an absent layer is an empty layer — and
+    both the "not found" and "invalid container_volumes" cases come from `load`, which has no
+    handler. They are asserted separately for that reason.
 
     The order is part of the assertion. `Exception` last is what leaves the specific clauses
     reachable; `FileNotFoundError` before `OSError` is what keeps a missing file from being
@@ -699,6 +1146,10 @@ class FailureCaseTest(TreeTest):
             self.tmp / "nested",
             {config.COMMITTED_FILE: nested_arrays(NESTING_DEPTH)},
         )
+        volumes = self.make_adapter(
+            self.tmp / "volumes",
+            {config.COMMITTED_FILE: 'container_volumes = ["/etc:/etc"]\n'},
+        )
 
         starts = {
             "not found": no_adapter,
@@ -706,6 +1157,7 @@ class FailureCaseTest(TreeTest):
             "not UTF-8": encoding.parent,
             "unreadable": unreadable.parent,
             "absorbed by the total clause": nested.parent,
+            "invalid container_volumes": volumes.parent,
         }
         found: dict[str, Unresolved] = {}
         for name, start in starts.items():
@@ -733,7 +1185,7 @@ class FailureCaseTest(TreeTest):
         """
         self.assertEqual(unresolved_sites(), len(self.CASE_NAMES))
 
-    def test_there_are_five_failure_cases_and_no_two_read_alike(self) -> None:
+    def test_there_are_six_failure_cases_and_no_two_read_alike(self) -> None:
         cases = self.cases()
         self.assertEqual(sorted(cases), self.CASE_NAMES)
         pairs = [(outcome.reason, outcome.hint) for outcome in cases.values()]
@@ -751,7 +1203,7 @@ class FailureCaseTest(TreeTest):
                 self.assertTrue(outcome.hint, name)
 
     def test_every_failure_about_a_file_names_that_file(self) -> None:
-        """The four file-shaped cases name `config.toml`; "not found" has no file to name
+        """The five file-shaped cases name `config.toml`; "not found" has no file to name
         and names the directory the walk started from instead."""
         cases = self.cases()
         for name in (
@@ -759,6 +1211,7 @@ class FailureCaseTest(TreeTest):
             "not UTF-8",
             "unreadable",
             "absorbed by the total clause",
+            "invalid container_volumes",
         ):
             with self.subTest(case=name):
                 self.assertIn(config.COMMITTED_FILE, cases[name].reason)

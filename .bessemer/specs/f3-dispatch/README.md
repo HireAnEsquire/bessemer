@@ -28,7 +28,7 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 282–301 | `status` intercept (docker-rows gathering) | F2 done; debt 3 wiring F3 | 10 | — |
 | 303–420 | `doctor` frame | F1, done | — | — |
 | 422–523 | `gc --force`: re-check, salvage-fetch, delete | **F3** (decision 1) | 11 | — |
-| 525–540 | config defaults: image, base, rounds, timeout, pids, memory, notify | F3 subset (notify verbosity excluded) | 01 | — |
+| 525–540 | config defaults: image, base, rounds, timeout, pids, memory, notify | F3 subset (notify verbosity excluded) | 01 | `test_config.SchemaTest` |
 | 542–596 | flag parse; feedback-conflict guards | F3 subset of flags | 10 | — |
 | 598–679 | no-arg picker, branch-creation carve-out | F5 | — | — |
 | 681–715 | `--last` | F4 | — | — |
@@ -233,7 +233,13 @@ is `.agentbox/stream-filter.py` at the pin, owned by issue 05.)
       `--cap-drop ALL` always in argv; cap-adds exactly the committed list.
    3. **`container_volumes`: named volumes only, committed-layer-only.** Source must not
       begin with `/` or `.` (no host binds through config; anonymous `"/path"` form
-      allowed — it names no host resource). Committed-layer-only with the same doctor
+      allowed — it names no host resource). *Sharpened by issue 01's implementation and
+      ratified at its review (2026-08-05): the source is matched against docker's
+      volume-name pattern (`[a-zA-Z0-9][a-zA-Z0-9_.-]*`), not merely checked for a leading
+      character — docker reads any source containing a `/` as a path, so `sub/dir:/y`
+      would pass the leading-character rule and arrive at issue 06's mount table as a host
+      bind. The stricter rule is the decision; do not "fix" the code back to this
+      paragraph's first sentence.* Committed-layer-only with the same doctor
       FAIL as the other two container keys (ruled 2026-08-05 with the issue breakdown —
       it is a mount boundary, same rule, same reason). Core chowns each entry's
       mountpoint to the agent user (generalizing run.sh:1273). **Coupling rule, fixed here:** upstream's

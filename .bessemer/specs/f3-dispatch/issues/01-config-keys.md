@@ -1,6 +1,6 @@
 # 01 — config keys: the eight F3 keys and their layer rules
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: —
 

@@ -64,3 +64,12 @@ decided yet" is updated — it is decided now: `/workspace`.
       sudoers content)
 - [ ] `make check` green (image verification is a build-and-inspect step in this issue's
       report, not part of the unit suite — the suite needs no docker)
+- [ ] **Malformed `container_cap_add` fails before any argv is built** (added from issue
+      01's review, 2026-08-05): issue 01 validates volume entries at load so a defect is
+      doctor-visible rather than mid-dispatch, and the same reason does not stop at
+      volumes. The case that motivates it: `container_cap_add = "SETUID"` — a bare string
+      — iterates as characters, and a builder that maps entries to `--cap-add` flags would
+      emit `--cap-add S --cap-add E …`. Wherever the shape check lands (issue 01's loader
+      pattern or this module's builder boundary), a non-list or non-string-entry value is
+      a refusal with the key named, and a test proves the bare-string case never reaches
+      an argv.

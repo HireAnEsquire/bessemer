@@ -162,6 +162,13 @@ moment it will ever have. That question was pressure-tested rather than assumed 
     public, values are private — the values themselves never leave the gitignored `.env`.
     Bessemer's own credential names are built-in defaults, so an adopter who needs nothing extra
     never encounters this key at all.
+  - *Amended 2026-08-05 (F3 decisions 5.2/5.3, ratified at issue 01's review): the exception now
+    covers three keys.* `container_cap_add` and `container_volumes` are committed-layer only for
+    the identical reason applied to the container's other two boundaries — capabilities and
+    mounts — with the identical doctor FAIL. "One documented exception" above was a count of the
+    boundaries bessemer had built at the time, not a limit. `bessemer.config.COMMITTED_ONLY_KEYS`
+    is the set; the loader exposes a local-layer violation as data for doctor to render and
+    dispatch to refuse, and neither reimplements the check.
 - **Prompts: package defaults, per-repo overrides.** Prompt templates ship inside the package; a
   same-named file under `.bessemer/prompts/` wins at read time. Users edit freely without
   forking, un-overridden defaults keep improving with the pin, and doctor reports the override

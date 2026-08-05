@@ -42,4 +42,11 @@ Blocked by: 05, 06
       token literal test (a `<verdict>approved</verdict>` embedded mid-output still
       matches — grep semantics, per the pin)
 - [ ] Heartbeat: with a fake clock advanced 4 minutes, exactly two heartbeat lines
+- [ ] **Non-numeric `max_review_rounds` / `pass_timeout` fail before the first pass**
+      (added from issue 01's review, 2026-08-05): issue 01's loader deliberately does not
+      coerce these — a `pass_timeout` arriving from the env layer is a string, recorded at
+      `test_config.py`'s pass_timeout test. The load-time-visibility reason behind volume
+      validation applies here too: whatever consumes these keys must reject a non-numeric
+      value with the key named before any container work starts, not crash mid-loop —
+      one test per key
 - [ ] `make check` green

@@ -26,20 +26,45 @@ That promise is kept by a **total** parse boundary rather than by an enumeration
 whose *fix* differs and a final `except Exception` absorbs the rest. An enumeration was
 tried three times and escaped three times.
 
-The five failure cases here — no adapter found, unparseable TOML, a file that is not UTF-8,
-a file that could not be read, and whatever the total clause absorbed — are told apart by
-their `reason` and `hint` text and by nothing else. There is no tag and no subtype, so a
-caller wanting to branch on *which* failure it got has to match on prose. That is the
-deliberate bar at F1: no caller branches on the case yet, doctor and dispatch both render or
-refuse on the pair as a whole, and a tag invented before anything reads it would be a schema
-nothing pins.
+The six failure cases here — no adapter found, unparseable TOML, a file that is not UTF-8, a
+file that could not be read, whatever the total clause absorbed, and a malformed
+`container_volumes` entry — are told apart by their `reason` and `hint` text and by nothing
+else. There is no tag and no subtype, so a caller wanting to branch on *which* failure it got
+has to match on prose. That is the deliberate bar at F1: no caller branches on the case yet,
+doctor and dispatch both render or refuse on the pair as a whole, and a tag invented before
+anything reads it would be a schema nothing pins.
 
 Whether the config root and the git root agree is *not* checked here — it needs git, so it
 is a resolver (issue 05). This module's answer to "where is the adapter" is deliberately
 allowed to be wrong in a way a later check can name.
+
+**Three keys are committed-layer only, and the loader reports the violation rather than
+resolving around it.** `container_env_keys`, `container_cap_add` and `container_volumes`
+each widen the container's boundary — which secrets cross it, which capabilities the
+process holds, which paths are mounted — and ADR 0001's rule for the first applies verbatim
+to the other two (F3 decisions 5.2 and 5.3): the point of naming these in a shared,
+committed file is that widening the boundary is a reviewable diff, and a gitignored
+`config.local.toml` erases exactly that property, silently, on one machine.
+
+Per ADR 0002's resolver discipline the *fact* lives here and the *response* does not:
+`committed_only_violations` exposes the keys a local layer set, **doctor renders them as
+FAIL** (F3 issue 09) and **dispatch hard-errors on the same value** (issue 10). Neither
+reimplements the check. Precedence is untouched — the local value still wins — because a
+loader that silently dropped it would leave a user staring at an override that looks
+ignored, and would leave the run to proceed on the committed value with nothing refusing
+it. The environment and flag layers are a different matter: neither can carry these keys at
+all, structurally, for the reasons written at `_env_layer` and `_flag_layer`.
+
+**`container_volumes` entries are validated at load, and a bad one fails the load.** The two
+forms are `name:/path` and `/path`; a source beginning with `/` or `.` is a host bind, which
+config may not express (F3 decision 5.3). Refusing here rather than in `container.py` makes
+the defect doctor-visible instead of surfacing mid-dispatch with a checkout cloned and a
+container half-started. It is the sixth failure case below, and the first that is not about
+reading a file: the TOML parsed, and the loader refuses what it says.
 """
 
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -56,29 +81,95 @@ LOCAL_FILE: Final = "config.local.toml"
 
 ENV_PREFIX: Final = "BESSEMER_"
 
-KNOWN_KEYS: Final = frozenset({"source", "base", "specs_dir"})
-"""Every key this loader reads. Three, because three is what has been built.
+KNOWN_KEYS: Final = frozenset(
+    {
+        "source",
+        "base",
+        "specs_dir",
+        "image",
+        "container_env_keys",
+        "container_cap_add",
+        "container_volumes",
+        "max_review_rounds",
+        "pass_timeout",
+        "pids_limit",
+        "memory",
+    }
+)
+"""Every key this loader reads. Eleven, because eleven is what has been built.
 
 Adopter-facing, so each is here for a named consumer rather than in anticipation of one —
 a key the loader accepts but nothing consults is a claim that bessemer is configured by
 something it never looks at:
 
 - `source` — the pinned git source `uvx --from` resolves the core from (ADR 0001,
-  distribution). Written by issue 07's adapter.
-- `base` — the ref a run's pull request targets. Also issue 07's.
+  distribution). Written by F1 issue 07's adapter.
+- `base` — the ref a run's pull request targets. Also that issue's.
 - `specs_dir` — where specs live, relative to the config root.
+- `image` — the adapter image a run's container is started from (F3 issue 06). No default:
+  its absence is a doctor FAIL and a dispatch hard error, which is a named refusal rather
+  than `docker run` failing later on an image the adopter never built.
+- `container_env_keys` — the environment variable names the gitignored `.bessemer/.env` may
+  forward into the container (ADR 0001). Bessemer's own credential names are built in and
+  live with the container issue, not here.
+- `container_cap_add` — capabilities added back after `--cap-drop ALL`, which is
+  unconditional and core-owned (F3 decision 5.2).
+- `container_volumes` — named or anonymous volumes mounted into the container
+  (F3 decision 5.3), each entry `name:/path` or `/path`; see `_volume_refusal`.
+- `max_review_rounds`, `pass_timeout` — the agent loop's cost knobs (F3 decision 7.3).
+- `pids_limit`, `memory` — the container's machine limits, required by ADR 0001's security
+  section and named there as a local-layer example.
+
+The last eight arrived together at F3, in the deliberate two-file edit F3 decision 8.6
+describes: this literal, and the hand-written one in `tests/test_config.py` that would
+otherwise agree with whatever this file happens to say.
 
 Keys present in a file but absent here are neither read nor rejected; see `unknown_keys`.
 """
 
-DEFAULTS: Final[Mapping[str, object]] = {"specs_dir": f"{ADAPTER_DIR}/specs"}
+COMMITTED_ONLY_KEYS: Final = frozenset(
+    {"container_env_keys", "container_cap_add", "container_volumes"}
+)
+"""The keys only `config.toml` may set. Every other key is legal at any layer.
+
+The three that widen the container boundary, and the reason is one reason stated once
+(ADR 0001, for `container_env_keys`; F3 decisions 5.2 and 5.3 cite it for the other two):
+widening it must be a reviewable diff, and a gitignored local layer erases that property on
+one machine with nothing to show for it.
+
+A local layer that sets one is reported by `committed_only_violations` and refused by its
+callers, not by this module. The environment and flag layers cannot reach these keys at
+all — see `_env_layer` and `_flag_layer`.
+"""
+
+DEFAULTS: Final[Mapping[str, object]] = {
+    "specs_dir": f"{ADAPTER_DIR}/specs",
+    "container_env_keys": [],
+    "container_cap_add": [],
+    "container_volumes": [],
+    "max_review_rounds": 3,
+    "pass_timeout": 900,
+    "pids_limit": 2048,
+    "memory": "8g",
+}
 """The lowest layer. A key with no entry here has no default and reads as `None`.
 
-`source` and `base` are deliberately absent, for different reasons. A source pin has no
-defensible default — bessemer cannot guess which ref a team pinned. `base` is auto-detected
-from `origin/HEAD` by issue 05's resolver, and auto-detection sits *below* defaults in the
-precedence chain, so a default here would not be a fallback: it would make the resolver
-dead code on every machine.
+The three container keys default to an empty list rather than to `None` so that issue 06's
+argv builders iterate rather than branch on `None` before every mount and every capability
+— and, more to the point, so that "adds nothing" is the shape of the default for every key
+that widens a boundary. The limits carry the port's own values (`run.sh:530–531`), and
+`max_review_rounds` / `pass_timeout` the loop's (F3 decision 7.3).
+
+`source`, `base` and `image` are deliberately absent, for three different reasons. A source
+pin has no defensible default — bessemer cannot guess which ref a team pinned. `base` is
+auto-detected from `origin/HEAD` by issue 05's resolver, and auto-detection sits *below*
+defaults in the precedence chain, so a default here would not be a fallback: it would make
+the resolver dead code on every machine. `image` names a thing the adopter builds, and any
+guess would replace doctor's FAIL with a `docker run` failure further from the cause.
+
+The empty lists here are module state, so `Config.get` hands back a copy of any list it
+returns. Without that, one caller appending to the list it got would widen the default for
+every later load in the process.
 """
 
 FLAG: Final = "flag"
@@ -148,11 +239,20 @@ class Config:
         return tuple((name, by_name[name]) for name in PRECEDENCE)
 
     def get(self, key: str) -> object | None:
-        """The winning value for `key`, or `None` if no layer sets it."""
+        """The winning value for `key`, or `None` if no layer sets it.
+
+        A `list` value is copied on the way out. Every layer here is shared — `DEFAULTS` for
+        the lifetime of the process, a parsed TOML layer for the lifetime of this `Config` —
+        so without the copy a caller that appended to the list it got would be editing the
+        configuration every later reader sees. Three of the list-valued keys are the ones
+        that widen the container boundary, and a privilege boundary a stray `append` can
+        move is not a boundary.
+        """
         _require_known(key)
         for _, values in self._layers():
             if key in values:
-                return values[key]
+                value = values[key]
+                return list(value) if isinstance(value, list) else value
         return None
 
     def layer_of(self, key: str) -> str | None:
@@ -163,15 +263,33 @@ class Config:
                 return name
         return None
 
+    def committed_only_violations(self) -> tuple[str, ...]:
+        """Committed-only keys that `config.local.toml` sets, sorted.
+
+        The fact, not the response: doctor renders one FAIL line per key (F3 issue 09) and
+        dispatch hard-errors on the same tuple (issue 10), and neither reimplements the
+        check — ADR 0002's resolver discipline, arriving at config because this one needs no
+        subprocess to answer.
+
+        Sorted, because doctor renders a line per key and the order of a TOML file is not
+        something a user should be able to move rendered output around with.
+
+        Nothing here inspects the *value*. A local layer that sets `container_volumes` to
+        something malformed fails the load outright (`_volume_refusal`) — being set in the
+        wrong file is not a licence to be ill-formed in it.
+        """
+        return tuple(sorted(COMMITTED_ONLY_KEYS & set(self.local)))
+
     def unknown_keys(self) -> tuple[str, ...]:
         """Keys present in either TOML layer that this loader does not read.
 
         Reported rather than rejected. The core is pinned by a committed ref (ADR 0001), so
         a config file written for a newer pin is read by an older core routinely; erroring
-        on an unrecognised key would turn `container_env_keys` landing in F3 into a hard
-        failure for anyone who had not yet bumped. Exposed rather than ignored because
-        issue 07's adapter must contain nothing but keys this loader reads, and that is an
-        assertion someone has to be able to make.
+        on an unrecognised key would have turned `container_env_keys` landing in F3 into a
+        hard failure for anyone who had not yet bumped — and `notify`, F4's notification
+        verbosity, is the next key with exactly that shape. Exposed rather than ignored
+        because F1 issue 07's adapter must contain nothing but keys this loader reads, and
+        that is an assertion someone has to be able to make.
         """
         return tuple(sorted((set(self.committed) | set(self.local)) - KNOWN_KEYS))
 
@@ -222,9 +340,10 @@ def _read_layer(path: Path) -> Resolved[Mapping[str, object]] | Unresolved:
 
     `tests/test_config.py` pins it: one test makes the constructor raise and asserts the
     exception *propagates*. It fails the moment anything of ours moves back inside. Key
-    normalisation, value coercion and F3's `container_env_keys` check all read as natural
-    additions right after the parse, which is why the property needs a test rather than a
-    paragraph.
+    normalisation and value coercion both read as natural additions right after the parse,
+    which is why the property needs a test rather than a paragraph — and F3's
+    `container_volumes` check, the first one actually written, sits in `load` for exactly
+    this reason rather than one line below `tomllib.load` where it would have been shorter.
     """
     try:
         with path.open("rb") as handle:
@@ -300,19 +419,114 @@ def _read_layer(path: Path) -> Resolved[Mapping[str, object]] | Unresolved:
     return Resolved(parsed)
 
 
+VOLUME_NAME: Final = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*\Z")
+"""What may appear before the `:` in a `container_volumes` entry: a docker volume name.
+
+Docker's own pattern for a named volume, and the boundary is drawn here rather than at
+"does not start with `/` or `.`" because docker reads any source containing a `/` as a
+path. `\\Z` rather than `$`, which would match before a trailing newline and let
+`"cache\\n:/x"` through.
+"""
+
+VOLUME_HINT: Final = (
+    'set container_volumes to a list of "name:/path" or "/path" entries, where a name is '
+    "letters, digits, dots, dashes and underscores; a source that names a host path is "
+    "refused, because no host path is mounted through config"
+)
+"""The fix for every `container_volumes` refusal, which is why they share one hint.
+
+The rule is one rule — two forms, no host sources — so a per-shape hint would be five
+spellings of the same sentence. The *reason* varies and is carried by the reason text,
+which quotes the entry that caused it.
+"""
+
+
+def _volume_refusal(volumes: object) -> str | None:
+    """Why `volumes` is not a legal `container_volumes` value, or `None` if it is.
+
+    The two accepted forms are `name:/path` (a named volume) and `/path` (anonymous). A
+    source beginning with `/` or `.` is a host bind, refused because config may not express
+    one (F3 decision 5.3): the point of naming volumes in a reviewable committed file is
+    lost if `../..:/` is among the things that can be named.
+
+    Everything else is refused too, rather than passed to docker to sort out — `cache:/a:/b`
+    would smuggle a mount option (`:ro`, `:z`) past a check that only looked for host
+    sources, and `cache:relative` is a `docker run` failure mid-dispatch instead of a doctor
+    line before one. The accepted set is exactly the two forms the decision names.
+
+    That is why the source is matched against `VOLUME_NAME` rather than merely checked for a
+    leading `/` or `.`. A leading-character test reads as sufficient and is not: docker
+    treats *any* source containing a `/` as a path, so `sub/dir:/y` and `~/secrets:/y` would
+    both pass a check written to keep host paths out of config and arrive at issue 06's
+    mount table as bind-shaped entries this module had declared legal.
+
+    Returns prose rather than raising, and prose rather than a tag, for the reason the whole
+    module does: the caller pairs it with `VOLUME_HINT` into the same `Unresolved` every
+    other failure here produces. Nothing branches on which refusal it was.
+    """
+    if not isinstance(volumes, list):
+        # A string would otherwise be walked character by character — `container_volumes =
+        # "cache:/cache"` is a plausible mistake, and refusing the letter `c` for not being
+        # an absolute path is not a message anyone can act on.
+        return f"is not a list of strings: {volumes!r}"
+
+    for entry in volumes:
+        if not isinstance(entry, str):
+            return f"entry {entry!r} is not a string"
+        if not entry:
+            return f"entry {entry!r} is empty"
+        if ":" not in entry:
+            if not entry.startswith("/"):
+                return (
+                    f"entry {entry!r} is neither a named volume (name:/path) nor an "
+                    f"absolute path (/path)"
+                )
+            continue
+        source, _, mount_point = entry.partition(":")
+        if not source:
+            return f"entry {entry!r} names no volume before its ':'"
+        if source.startswith("/") or source.startswith("."):
+            # Its own message, ahead of the general one below, because it is the mistake the
+            # rule exists for: a user who wrote `../x:/y` meant to mount a host directory
+            # and needs to be told config cannot do that, not that they mistyped a name.
+            return (
+                f"entry {entry!r} names the host path {source!r} as its source; a source "
+                f"beginning with / or . is refused"
+            )
+        if not VOLUME_NAME.match(source):
+            return f"entry {entry!r} has a source that is not a volume name: {source!r}"
+        if not mount_point.startswith("/"):
+            return f"entry {entry!r} has a mount point that is not an absolute path"
+        if ":" in mount_point:
+            return f"entry {entry!r} has more than one ':'"
+    return None
+
+
 def _env_layer(env: Mapping[str, str]) -> Mapping[str, object]:
-    """The `BESSEMER_*` variables that name a key this loader reads.
+    """The `BESSEMER_*` variables that name a key this loader reads and a layer may set.
 
     Built from `KNOWN_KEYS` rather than by scanning the environment for the prefix. That is
     what makes "no `BESSEMER_ROOT`" structural instead of a rule someone has to remember:
     `root` is not a key, so no environment variable can reach discovery.
+
+    `COMMITTED_ONLY_KEYS` is subtracted for the same kind of reason, one step further on.
+    Those keys widen the container boundary and the rule is that widening it is a reviewable
+    diff; an environment variable is *less* reviewable than the `config.local.toml` the rule
+    already forbids, so `BESSEMER_CONTAINER_ENV_KEYS=AWS_SECRET_ACCESS_KEY` cannot be left
+    as something doctor reports after the fact. Enforced by construction rather than by a
+    check, so that whoever adds the next committed-only key inherits it without reading this.
+
+    The consequence, named rather than hidden: such a variable is ignored silently, exactly
+    as `BESSEMER_ROOT` is. Reporting it would mean a second violation channel for a value no
+    layer ever carried, and the local layer — where a user actually writes these — is the
+    one doctor FAILs on.
 
     A variable that is set but empty counts as set. The alternative — treating `""` as
     absent — invents a rule the shell does not have, and would silently ignore a value the
     user can see in their own environment.
     """
     layer: dict[str, object] = {}
-    for key in sorted(KNOWN_KEYS):
+    for key in sorted(KNOWN_KEYS - COMMITTED_ONLY_KEYS):
         name = ENV_PREFIX + key.upper()
         if name in env:
             layer[key] = env[name]
@@ -328,10 +542,18 @@ def _flag_layer(flags: Mapping[str, object]) -> Mapping[str, object]:
 
     An unrecognised key raises: flags are bessemer's own code calling bessemer, so a name
     that is not a config key is a bug in this package rather than a user's mistake, and the
-    two must not be reported the same way.
+    two must not be reported the same way. A committed-only key raises for the same reason
+    — no such flag exists (F3's flag set is `<spec>`, `--branch`, `--base`), so one arriving
+    is this package handing a boundary-widening value to itself from the least reviewable
+    place there is.
     """
     for key in flags:
         _require_known(key)
+        if key in COMMITTED_ONLY_KEYS:
+            raise ValueError(
+                f"{key!r} is committed-layer only and has no flag; "
+                f"this loader's committed-only keys are {sorted(COMMITTED_ONLY_KEYS)}"
+            )
     return {key: value for key, value in flags.items() if value is not None}
 
 
@@ -366,11 +588,22 @@ def load(
 
     layers: dict[str, Mapping[str, object]] = {}
     for name, filename in ((COMMITTED, COMMITTED_FILE), (LOCAL, LOCAL_FILE)):
+        path = adapter_dir / filename
         # The first unreadable layer ends the load. Reading the second and reporting both
         # would mean returning two reasons in a type that carries one, and the fix for the
         # first is a prerequisite for trusting anything said about the second.
-        match _read_layer(adapter_dir / filename):
+        match _read_layer(path):
             case Resolved(value=values):
+                # Both layers, including the one that may not set this key at all: being
+                # written in the wrong file is not a licence to be ill-formed in it, and
+                # `config.local.toml` is the layer nobody reviews.
+                if "container_volumes" in values:
+                    refusal = _volume_refusal(values["container_volumes"])
+                    if refusal is not None:
+                        return Unresolved(
+                            reason=f"{path}: container_volumes {refusal}",
+                            hint=VOLUME_HINT,
+                        )
                 layers[name] = values
             case Unresolved() as unresolved:
                 return unresolved

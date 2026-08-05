@@ -44,13 +44,26 @@ the loader grows later, and this adapter is meant to carry only the two it actua
 configured by something more than it is.
 """
 
-LOADER_KEYS: Final = {"source", "base", "specs_dir"}
-"""What the issue 04 loader reads, restated by hand. Its schema, this file's obligation.
+LOADER_KEYS: Final = {
+    "source",
+    "base",
+    "specs_dir",
+    "image",
+    "container_env_keys",
+    "container_cap_add",
+    "container_volumes",
+    "max_review_rounds",
+    "pass_timeout",
+    "pids_limit",
+    "memory",
+}
+"""What the loader reads, restated by hand. Its schema, this file's obligation.
 
-Issue 04 pins this set in `tests/test_config.py`; it is written out a second time here because
-the criterion this file has to meet is that the adapter contains nothing the loader ignores,
-and an assertion reading `config.KNOWN_KEYS` would keep passing if a key were added to both the
-loader and the adapter without anyone deciding it should exist.
+F1 issue 04 pins this set in `tests/test_config.py` and F3 issue 01 grew it from three keys to
+eleven; it is written out a second time here because the criterion this file has to meet is that
+the adapter contains nothing the loader ignores, and an assertion reading `config.KNOWN_KEYS`
+would keep passing if a key were added to both the loader and the adapter without anyone
+deciding it should exist.
 """
 
 IGNORED_PATHS: Final = (
