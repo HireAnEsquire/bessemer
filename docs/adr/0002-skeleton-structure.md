@@ -119,6 +119,14 @@ and that single requirement forces most of what follows.
   one would make the boundary unenforceable — so the config excludes the directory. The checks
   cannot be the thing that violates the rule the checks exist to protect.
 
+  *Amended at issue 05 (2026-08-05): the same sentence covers a **fixture**, and for the same
+  reason.* `tests/fixtures/stream/` holds bytes captured from the port source and compared
+  byte-for-byte; its `.stderr` files carry lines ending in a space, which the
+  trailing-whitespace hook trims. A check that rewrote the oracle would leave a parity test
+  comparing this repository's formatting preferences to themselves. The exclusion names the
+  captured extensions rather than the directory, so a fixture directory's own prose is still
+  tidied.
+
 ## Consequences
 
 - The unit suite must pass with no Docker daemon, no network, and outside any git repository. CI

@@ -1,0 +1,9 @@
+claude > Bash: printf '%.200s\n' "The Bessemer process, patented by Henry Bessemer in 1856 after parallel work by William Kelly in Kentucky, blew cold air through molten pi...
+claude | Printed:
+claude | 
+claude | `The Bessemer process, patented by Henry Bessemer in 1856 after parallel work by William Kelly in Kentucky, blew cold air through molten pig iron to burn off carbon and silicon, cutting the cost of ste`
+claude | 
+claude | Cut mid-word at "ste" — exactly 200 chars. `printf '%.200s'` did truncation, no `cut` needed.
+claude ~ The command has to be one line, so printf with a precision specifier.
+claude ~ Then read back what it printed.
+Error: Input must be provided either through stdin or as a prompt argument when using --print

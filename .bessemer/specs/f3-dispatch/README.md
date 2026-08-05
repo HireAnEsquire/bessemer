@@ -54,7 +54,13 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 1726–1732 | dispatch entry | F3 | 10 | — |
 
 (The host-side stream filter — decision 5.1's divergence — has no run.sh row; its oracle
-is `.agentbox/stream-filter.py` at the pin, owned by issue 05. Likewise the three prompt
+is `.agentbox/stream-filter.py` at the pin, owned by issue 05 — landed 2026-08-05, pinned
+by `tests.test_stream`. Its parity evidence is unlike every other pin here: upstream's own
+filter was run host-side over four real stream-json transcripts and its bytes committed
+beside them (`tests/fixtures/stream/`), so "log lines identical" is a byte comparison
+rather than a reading. One divergence recorded in the module docstring beyond the
+host-side move itself: a line that is valid JSON but not an object crashes the oracle
+(measured), and takes the malformed-line arm here instead. Likewise the three prompt
 templates: oracles are `.agentbox/{implement,review,pr}-prompt.md` at the pin, owned by
 issue 03 — landed 2026-08-05, pinned by `tests.test_prompts` (sections, deltas, retired-word
 absence). The `1432–1492` row's test column stays open until 07 and 10 land their parts.

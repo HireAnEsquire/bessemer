@@ -14,7 +14,10 @@ home, and nowhere else.
 
 ## Decisions
 
-- **Six new modules, one small seventh.** The interface listed is the whole of it.
+- **The module map. The interface listed is the whole of it.** Written as six plus a small
+  seventh; `stream.py` was added when issue 05 landed it (2026-08-05), and the numeral came
+  out of this sentence with it — a count restating a table is two values that can disagree,
+  and this one already had.
 
   | Module | Interface | What hides behind it |
   |---|---|---|
@@ -25,6 +28,7 @@ home, and nowhere else.
   | `landing.py` | `land(...) -> Landing` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
   | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. |
   | `prompts.py` | `load(name) -> str`; `overridden(adapter_dir)`; `TEMPLATE_NAMES` | Package-default vs `.bessemer/prompts/` override resolution (ADR 0001). Two consumers at F3 already: the three passes, and doctor's override count — `overridden` exists so doctor never restates the override path (added at issue 03, 2026-08-05). |
+  | `stream.py` | `filtered(transcript, *, emit) -> Capture`; `brief(inputs)` | The provider's stream-json: the `claude \|/>` rendering and final-text capture, which ADR 0001 names as one surface. Pure — no proc, no filesystem — because F3 README decision 5.1 moved it out of the container, where the pin ran it as `python3 /agentbox/stream-filter.py` (run.sh:1099) on an assumption about the adapter image. Its consumer at F3 will be `passes.py`, which issue 07 has yet to write (added at issue 05, 2026-08-05). |
 
 - **`checkout.py` and `container.py` stay separate.** *Rejected: one `environment.py`*
   (CONTEXT.md groups them as "the isolated environment") — their failure domains and

@@ -1,0 +1,5 @@
+Printed:
+
+`The Bessemer process, patented by Henry Bessemer in 1856 after parallel work by William Kelly in Kentucky, blew cold air through molten pig iron to burn off carbon and silicon, cutting the cost of ste`
+
+Cut mid-word at "ste" — exactly 200 chars. `printf '%.200s'` did truncation, no `cut` needed.

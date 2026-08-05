@@ -5,10 +5,22 @@
 # `make check`. Tests are deliberately not here: they run in `make check`, so commits stay
 # fast while the gate an agent must pass stays complete.
 
+# Two directories the fixer hooks must never touch.
+#
 # Spec files are host-side state. From F3 the implement prompt declares this directory
 # read-only to the agent and review treats an agent-authored edit to it as a review-stopping
 # finding — so the fixer hooks below must never be the thing that rewrites one.
-exclude: ^\.bessemer/specs/
+#
+# A fixture holds bytes captured from something other than this repository and compared
+# byte-for-byte, so a fixer hook rewriting one rewrites the evidence. `tests/fixtures/stream/`
+# is the live case: the `.stderr` files are upstream's own filter output and carry lines
+# ending in a space — a rendered blank line inside an agent's message. Measured: the
+# trailing-whitespace hook trims exactly those, which turns "identical to the pin" into
+# "identical to the pin, once our formatter had a go at it".
+#
+# The three captured extensions, not the whole directory: a fixture directory's own prose —
+# `tests/fixtures/stream/README.md` — is source, and should be tidied like any other file.
+exclude: ^(\.bessemer/specs/|tests/fixtures/.*\.(jsonl|stderr|stdout)$)
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
