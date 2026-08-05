@@ -1,6 +1,6 @@
 # 02 — quotability: one policy for what a Result may say, and where
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: —
 
@@ -17,6 +17,23 @@ The destination classes and what each may carry — this table is the owned lite
 |---|---|
 | host log / operator console | argv, returncode, stderr **after `redact.redacted` + `DETAIL_LIMIT`** |
 | PR body, notification, prompt (agent-visible) | argv program name and returncode only — **never stderr, never argv arguments** (a remote URL rides in arguments too) |
+
+**Sharpened by this issue's implementation and ratified at its review (2026-08-05).** The
+code is stricter than the two rows above in three places; the stricter rule is the
+decision, and none of it may be "fixed" back to the table's wording:
+
+1. *Host log quotes argv redacted, not raw.* The row permits argv, and a remote URL rides
+   in an argument — so quoting argv raw would put the token in the log by the other
+   channel. Same redactor, not a second one.
+2. *Host log quotes the first line of stderr only.* `redact.detail` is `redacted` +
+   `DETAIL_LIMIT` plus redact.py's own first-line rule, and is how doctor and resolve
+   already spell this. Later lines are advice aimed at an interactive user.
+3. *`DETAIL_LIMIT` caps the stderr and not the argv.* The cap is redact's rule about
+   another program's output; argv is bessemer's own, a docker argv is legitimately long,
+   and a truncated one hides the flag that mattered.
+
+Agent-visible's "program name" is the basename of `argv[0]`: an absolute host path tells
+an off-machine reader about the operator's filesystem and nothing about the failure.
 
 ## Why proc.py and not redact.py
 

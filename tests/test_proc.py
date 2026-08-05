@@ -3,6 +3,11 @@
 Every child spawned here is `sys.executable`, which `tests/guard.py` allowlists. The
 static half of this issue — that no other module may spawn at all — is
 `tests/test_argv_boundary.py`.
+
+The quotability classes at the end spawn nothing at all: the policy is a pure function
+over a `Result`, and the credential-bearing text is a literal, for the reason
+`tests/test_redact.py` writes one — git prints a remote URL while *contacting* the
+remote, and this suite may not.
 """
 
 import contextlib
@@ -16,11 +21,16 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
-from bessemer.proc import ProcessError, Result, run, run_checked
+from bessemer import proc, redact
+from bessemer.proc import Destination, ProcessError, Result, quote, run, run_checked
 
 TIMEOUT: Final = 30
 """Generous, because it is a backstop and not the thing under test. The one test that is
 about the timeout sets its own."""
+
+TOKEN: Final = "ghp_thisisnotarealtokenbutitlookslikeone"
+CREDENTIAL_URL: Final = f"https://x-access-token:{TOKEN}@github.com/HireAnEsquire/bessemer.git"
+REDACTED_URL: Final = "https://<redacted>@github.com/HireAnEsquire/bessemer.git"
 
 
 def python(*statements: str) -> list[str]:
@@ -320,6 +330,204 @@ class ResultTest(unittest.TestCase):
     def test_a_failed_result_is_still_truthy(self) -> None:
         """The consequence, pinned: `if result:` is useless here, which is the point."""
         self.assertTrue(bool(self.result(1)))
+
+
+def failed_push() -> Result:
+    """A push that failed with a credential-bearing remote URL in argv *and* in stderr.
+
+    Both channels carry it because both are ways it actually happens: git echoes the URL it
+    could not reach, and the URL was on the command line to begin with. A fixture that
+    carried it in only one of them would let a policy that guards one and forgets the other
+    pass.
+    """
+    return Result(
+        argv=("git", "push", CREDENTIAL_URL, "HEAD:bessemer/f3-dispatch"),
+        returncode=128,
+        stdout="",
+        stderr=(
+            f"fatal: unable to access '{CREDENTIAL_URL}': the remote hung up\n"
+            "hint: a paragraph of advice for an interactive user\n"
+        ),
+    )
+
+
+class DestinationTest(unittest.TestCase):
+    """The destination table (ADR 0003, F3 issue 02), restated by hand.
+
+    The table is the owned literal: two destinations, and what each may carry. A third one
+    arriving — "the container log", "the ledger" — must be a deliberate edit here as well as
+    in `proc.py`, because that is the moment somebody decides who is allowed to read stderr.
+    Derived from `Destination` instead, this test would ratify whatever was added.
+    """
+
+    def test_there_are_exactly_two_destinations(self) -> None:
+        self.assertEqual(
+            [(member.name, member.value) for member in Destination],
+            [("HOST_LOG", "host log"), ("AGENT_VISIBLE", "agent-visible")],
+        )
+
+    def test_the_destination_has_no_default(self) -> None:
+        """So the permissive row cannot be reached by omission. The message is asserted, not
+        merely the exception type: `TypeError` is also what a misspelled keyword raises, and
+        a test that took either would stay green on a signature that had grown a default and
+        started failing for some other reason entirely."""
+        # Erases mypy's `call-arg`: omitting a required keyword is the case being pinned.
+        erased: Callable[..., object] = quote
+        with self.assertRaises(TypeError) as caught:
+            erased(failed_push())
+        self.assertIn("destination", str(caught.exception))
+
+    def test_the_destination_is_keyword_only(self) -> None:
+        """Positional would let a call site pick a reader by argument order — and put the two
+        rows one comma apart."""
+        # Erases mypy's `too-many-positional-arguments`, which is the assertion.
+        erased: Callable[..., object] = quote
+        with self.assertRaises(TypeError) as caught:
+            erased(failed_push(), Destination.HOST_LOG)
+        self.assertIn("positional", str(caught.exception))
+
+
+class HostLogQuotingTest(unittest.TestCase):
+    """Row one: argv, returncode, and stderr after `redacted` + `DETAIL_LIMIT`."""
+
+    def test_the_whole_row_is_one_literal(self) -> None:
+        self.assertEqual(
+            quote(failed_push(), destination=Destination.HOST_LOG),
+            f"['git', 'push', '{REDACTED_URL}', 'HEAD:bessemer/f3-dispatch'] exited 128: "
+            f"fatal: unable to access '{REDACTED_URL}': the remote hung up",
+        )
+
+    def test_a_credential_in_stderr_arrives_redacted_rather_than_dropped(self) -> None:
+        """The operator is the one reader who needs the failure text, so it is quoted — but
+        the run log is a file that outlives the console, so it is quoted redacted."""
+        line = quote(failed_push(), destination=Destination.HOST_LOG)
+        self.assertNotIn(TOKEN, line)
+        self.assertIn("<redacted>@", line)
+        self.assertIn("the remote hung up", line)
+
+    def test_argv_is_redacted_too_rather_than_only_stderr(self) -> None:
+        """Stricter than the table's row, deliberately: the table permits argv, and a remote
+        URL rides in an argument as readily as in git's echo of it. Quoting argv raw would
+        put the token in the log by the other channel."""
+        line = quote(failed_push(), destination=Destination.HOST_LOG)
+        self.assertNotIn(TOKEN, line)
+        self.assertIn("'git', 'push'", line)
+
+    def test_only_the_first_line_of_stderr_is_quoted(self) -> None:
+        """Narrower than "stderr", and pinned so the narrowing is visible: `redact.detail`'s
+        rule is that the later lines of a git or docker failure are advice aimed at an
+        interactive user. Reached through the shared helper rather than restated here."""
+        self.assertNotIn("hint:", quote(failed_push(), destination=Destination.HOST_LOG))
+
+    def test_the_quoted_stderr_is_capped(self) -> None:
+        """`DETAIL_LIMIT` reached through `redact`, not a second cap: a screen of git advice
+        in a log line is the thing that stops being read."""
+        result = Result(argv=("git", "status"), returncode=1, stdout="", stderr="x" * 500)
+        line = quote(result, destination=Destination.HOST_LOG)
+        self.assertEqual(line, f"['git', 'status'] exited 1: {'x' * redact.DETAIL_LIMIT}")
+
+    def test_a_silent_failure_says_so_rather_than_ending_in_a_colon(self) -> None:
+        result = Result(argv=("git", "status"), returncode=1, stdout="", stderr="  \n")
+        self.assertEqual(
+            quote(result, destination=Destination.HOST_LOG),
+            "['git', 'status'] exited 1: <no stderr>",
+        )
+
+
+class AgentVisibleQuotingTest(unittest.TestCase):
+    """Row two: the program name and the returncode. Nothing else, from anywhere.
+
+    A pull request body, a notification and an assembled prompt are one destination because
+    the reader is the same — someone outside this machine, including the agent, whose whole
+    input is attacker-adjacent text.
+    """
+
+    def test_the_whole_row_is_one_literal(self) -> None:
+        self.assertEqual(
+            quote(failed_push(), destination=Destination.AGENT_VISIBLE), "git exited 128"
+        )
+
+    def test_no_fragment_of_stderr_reaches_an_agent_visible_destination(self) -> None:
+        """**The named test.** Not "no token": a redacted URL would satisfy that while still
+        forwarding another program's failure text to a reader the module docstring forbids.
+        Every fragment of the fixture's stderr is asserted absent, including the redacted
+        shape, so widening the agent-visible arm to quote stderr — redacted or not — is red.
+        """
+        line = quote(failed_push(), destination=Destination.AGENT_VISIBLE)
+        for fragment in (
+            TOKEN,
+            CREDENTIAL_URL,
+            REDACTED_URL,
+            "<redacted>",
+            "github.com",
+            "fatal",
+            "unable to access",
+            "the remote hung up",
+            "hint",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, line)
+
+    def test_argv_arguments_never_reach_an_agent_visible_destination(self) -> None:
+        """The second half of the row, and the one a reader is likeliest to think harmless:
+        a remote URL rides in an argument too, so "argv" is not quotable here even though
+        `git push` looks like public information."""
+        line = quote(failed_push(), destination=Destination.AGENT_VISIBLE)
+        for fragment in ("push", CREDENTIAL_URL, REDACTED_URL, "bessemer/f3-dispatch"):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, line)
+
+    def test_the_program_is_named_rather_than_pathed(self) -> None:
+        """The name, not argv[0] whole: an absolute host path tells an outside reader about
+        the operator's filesystem and tells them nothing about the failure."""
+        result = Result(
+            argv=("/opt/homebrew/bin/git", "status"), returncode=1, stdout="", stderr=""
+        )
+        self.assertEqual(quote(result, destination=Destination.AGENT_VISIBLE), "git exited 1")
+
+    def test_an_argv_with_no_usable_program_is_named_rather_than_blank(self) -> None:
+        """`run` cannot produce any of these, but the tier-2 double constructs `Result`s by
+        hand — and a composition site that raises while composing a failure notification
+        loses the failure it was reporting.
+
+        The last two cases are why the fallback cannot be a truthiness check on the argv
+        tuple: the tuple is non-empty and the *basename* is what comes back empty, which
+        renders as a line beginning " exited 1" — the same defect wearing a space.
+        """
+        for argv in ((), ("",), ("/",)):
+            with self.subTest(argv=argv):
+                result = Result(argv=argv, returncode=1, stdout="", stderr="")
+                self.assertEqual(
+                    quote(result, destination=Destination.AGENT_VISIBLE),
+                    "<no program> exited 1",
+                )
+
+
+class OneRedactorTest(unittest.TestCase):
+    """The policy wraps `bessemer.redact`; it does not grow a second copy of it.
+
+    `redact.py`'s contract is to import nothing from the package, which is why the policy
+    lives here and not there — and why the temptation from here is to inline the regex.
+    """
+
+    def test_proc_uses_the_shared_redactor_module(self) -> None:
+        # Through `vars()` rather than attribute access: mypy refuses a read of a name a
+        # module imported but does not re-export, which is exactly what is being asserted.
+        self.assertIs(vars(proc)["redact"], redact)
+
+    def test_proc_defines_no_redactor_of_its_own(self) -> None:
+        self.assertFalse(hasattr(proc, "_CREDENTIAL_IN_URL"))
+        self.assertFalse(hasattr(proc, "_redact"))
+        self.assertFalse(hasattr(proc, "DETAIL_LIMIT"))
+
+    def test_the_quoted_stderr_is_exactly_what_the_shared_helper_returns(self) -> None:
+        """One definition, asserted by behaviour and not only by import: a second regex that
+        agreed today would still be free to disagree tomorrow, and the one that disagrees
+        silently is the one printing into a pull request body."""
+        pushed = failed_push()
+        self.assertIn(
+            redact.detail(pushed.stderr), quote(pushed, destination=Destination.HOST_LOG)
+        )
 
 
 if __name__ == "__main__":
