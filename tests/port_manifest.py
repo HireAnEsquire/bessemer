@@ -57,8 +57,9 @@ census" reads as pinning more than it does, and this is the sentence that stops 
     Not every `cmd_*` test splits. Decision 5 was refined during issue 01: a subcommand that
     exists only because the port source's `run.sh` is bash and had to spawn python to reach
     a function is excluded rather than split, because bessemer's dispatcher calls the
-    function directly. `CmdFeedbackEditStripTests` is the first such case, and it is why
-    this disposition has still never been used on real data.
+    function directly. `CmdFeedbackEditStripTests` was the first such case, and issues 02
+    and 03 excluded five more. The first real use is issue 04's `CmdStatusTests`: `status`
+    is a subcommand a human types, so each of its three tests lands in two halves.
 
 `EXCLUDED`
     Not coming, with a reason in prose that says why bessemer is better without it. Never
@@ -364,6 +365,8 @@ MIGRATION_REACHED_INDIRECTLY = (
 ISSUES = "tests.test_issues"
 LEDGER = "tests.test_ledger"
 RESUME = "tests.test_resume"
+STATUS = "tests.test_status"
+CLI = "tests.test_cli"
 
 
 # ---------------------------------------------------------------------------------------
@@ -687,16 +690,40 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         excluded("test_already_migrated_is_a_no_op", MIGRATION_DEAD_ON_ARRIVAL),
     ),
     "ParseDockerRowsTests": (
-        pending("test_filters_to_agentbox_prefixed_containers"),
-        pending("test_skips_blank_lines"),
-        pending("test_row_with_no_status_field_is_tolerated"),
-        pending("test_empty_input_returns_empty"),
+        ported(
+            "test_filters_to_agentbox_prefixed_containers",
+            Counterpart(STATUS, "test_only_containers_with_the_bessemer_prefix_come_back"),
+        ),
+        ported(
+            "test_skips_blank_lines",
+            Counterpart(STATUS, "test_blank_lines_are_skipped"),
+        ),
+        ported(
+            "test_row_with_no_status_field_is_tolerated",
+            Counterpart(STATUS, "test_a_row_with_no_status_field_is_tolerated"),
+        ),
+        ported(
+            "test_empty_input_returns_empty",
+            Counterpart(STATUS, "test_empty_input_parses_to_no_containers"),
+        ),
     ),
     "StaleLocksTests": (
-        pending("test_lock_with_no_matching_container_is_stale"),
-        pending("test_lock_with_matching_container_is_not_stale"),
-        pending("test_missing_locks_dir_returns_empty"),
-        pending("test_results_are_sorted"),
+        ported(
+            "test_lock_with_no_matching_container_is_stale",
+            Counterpart(STATUS, "test_a_lock_with_no_matching_container_is_stale"),
+        ),
+        ported(
+            "test_lock_with_matching_container_is_not_stale",
+            Counterpart(STATUS, "test_a_lock_with_a_matching_container_is_not_stale"),
+        ),
+        ported(
+            "test_missing_locks_dir_returns_empty",
+            Counterpart(STATUS, "test_a_missing_locks_directory_has_no_stale_locks"),
+        ),
+        ported(
+            "test_results_are_sorted",
+            Counterpart(STATUS, "test_the_results_come_back_sorted"),
+        ),
     ),
     "CollectRecentLedgerRecordsTests": (
         ported(
@@ -733,62 +760,175 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         ),
     ),
     "OverallOutcomeTests": (
-        pending("test_one_off_approved_outcome"),
-        pending("test_one_off_needs_work_outcome"),
-        pending("test_feature_all_issues_approved"),
-        pending("test_feature_partial_approval"),
-        pending("test_no_outcome_or_issues_is_dash"),
+        ported(
+            "test_one_off_approved_outcome",
+            Counterpart(STATUS, "test_a_one_off_approved_outcome_renders_with_a_tick"),
+        ),
+        ported(
+            "test_one_off_needs_work_outcome",
+            Counterpart(STATUS, "test_a_one_off_needs_work_outcome_renders_with_a_warning"),
+        ),
+        ported(
+            "test_feature_all_issues_approved",
+            Counterpart(STATUS, "test_a_feature_with_every_issue_approved_is_approved"),
+        ),
+        ported(
+            "test_feature_partial_approval",
+            Counterpart(STATUS, "test_a_partially_approved_feature_shows_the_fraction"),
+        ),
+        ported(
+            "test_no_outcome_or_issues_is_dash",
+            Counterpart(STATUS, "test_no_outcome_and_no_issues_renders_as_a_dash"),
+        ),
     ),
     "AgeTests": (
-        pending("test_missing_timestamp_is_unknown"),
-        pending("test_malformed_timestamp_is_unknown"),
-        pending("test_recent_timestamp_is_seconds_ago"),
-        pending("test_minutes_ago"),
-        pending("test_hours_ago"),
-        pending("test_days_ago"),
+        ported(
+            "test_missing_timestamp_is_unknown",
+            Counterpart(STATUS, "test_a_missing_timestamp_is_unknown"),
+        ),
+        ported(
+            "test_malformed_timestamp_is_unknown",
+            Counterpart(STATUS, "test_a_malformed_timestamp_is_unknown"),
+        ),
+        ported(
+            "test_recent_timestamp_is_seconds_ago",
+            Counterpart(STATUS, "test_a_recent_timestamp_renders_in_seconds"),
+        ),
+        ported(
+            "test_minutes_ago",
+            Counterpart(STATUS, "test_an_age_in_minutes_renders_in_minutes"),
+        ),
+        ported(
+            "test_hours_ago",
+            Counterpart(STATUS, "test_an_age_in_hours_renders_in_hours"),
+        ),
+        ported(
+            "test_days_ago",
+            Counterpart(STATUS, "test_an_age_in_days_renders_in_days"),
+        ),
     ),
     "FormatTableTests": (
-        pending("test_aligns_columns_and_leaves_last_unpadded"),
-        pending("test_truncates_only_marked_columns"),
+        ported(
+            "test_aligns_columns_and_leaves_last_unpadded",
+            Counterpart(STATUS, "test_columns_align_and_the_last_is_left_unpadded"),
+        ),
+        ported(
+            "test_truncates_only_marked_columns",
+            Counterpart(STATUS, "test_only_marked_columns_are_truncated"),
+        ),
     ),
     "RenderRunningTests": (
-        pending("test_docker_down_skips_containers_and_lock_check"),
-        pending("test_no_containers_says_so"),
-        pending("test_live_container_row_includes_branch_uptime_and_tail_command"),
-        pending("test_stale_lock_flagged_when_no_matching_container"),
-        pending("test_lock_with_live_container_not_flagged"),
+        ported(
+            "test_docker_down_skips_containers_and_lock_check",
+            Counterpart(STATUS, "test_docker_down_skips_containers_and_the_lock_check"),
+        ),
+        ported(
+            "test_no_containers_says_so",
+            Counterpart(STATUS, "test_no_running_containers_says_so"),
+        ),
+        ported(
+            "test_live_container_row_includes_branch_uptime_and_tail_command",
+            Counterpart(STATUS, "test_a_container_row_carries_branch_uptime_and_tail_command"),
+        ),
+        ported(
+            "test_stale_lock_flagged_when_no_matching_container",
+            Counterpart(STATUS, "test_a_stale_lock_is_flagged_when_no_container_matches"),
+        ),
+        ported(
+            "test_lock_with_live_container_not_flagged",
+            Counterpart(STATUS, "test_a_lock_with_a_live_container_is_not_flagged"),
+        ),
     ),
     "RenderRecentTests": (
-        pending("test_no_records_says_so"),
-        pending("test_respects_limit"),
-        pending("test_row_includes_pr_url_unmodified"),
-        pending("test_missing_pr_url_shows_dash"),
+        ported(
+            "test_no_records_says_so",
+            Counterpart(STATUS, "test_no_records_says_so"),
+        ),
+        ported(
+            "test_respects_limit",
+            Counterpart(STATUS, "test_the_limit_is_respected"),
+        ),
+        ported(
+            "test_row_includes_pr_url_unmodified",
+            Counterpart(STATUS, "test_a_row_carries_the_pull_request_url_unmodified"),
+        ),
+        ported(
+            "test_missing_pr_url_shows_dash",
+            Counterpart(STATUS, "test_a_missing_pull_request_url_shows_a_dash"),
+        ),
     ),
     "RenderStatusTests": (
-        pending("test_empty_state_exits_cleanly_with_both_sections"),
-        pending("test_full_fixture_shows_running_and_recent_sections"),
-        pending("test_docker_down_still_renders_recent"),
+        ported(
+            "test_empty_state_exits_cleanly_with_both_sections",
+            Counterpart(STATUS, "test_an_empty_state_renders_both_sections_cleanly"),
+        ),
+        ported(
+            "test_full_fixture_shows_running_and_recent_sections",
+            Counterpart(STATUS, "test_a_full_fixture_shows_running_and_recent_sections"),
+        ),
+        ported(
+            "test_docker_down_still_renders_recent",
+            Counterpart(STATUS, "test_docker_down_still_renders_recent"),
+        ),
         excluded(
             "test_renders_legacy_per_dir_ledgers_via_migration",
             MIGRATION_REACHED_INDIRECTLY,
         ),
     ),
     "CmdStatusTests": (
-        pending("test_reads_docker_rows_from_stdin"),
-        pending("test_docker_down_does_not_read_stdin"),
-        pending("test_exit_code_zero_on_empty_state"),
+        # Decision 5's first genuine split: `status` is a subcommand a human types.
+        # Computation half in tests/test_status.py, printing half in tests/test_cli.py.
+        split(
+            "test_reads_docker_rows_from_stdin",
+            Counterpart(STATUS, "test_docker_rows_handed_in_reach_the_running_table"),
+            Counterpart(CLI, "test_the_rows_the_gather_returned_are_printed"),
+        ),
+        split(
+            "test_docker_down_does_not_read_stdin",
+            Counterpart(STATUS, "test_docker_down_ignores_rows_handed_in"),
+            Counterpart(CLI, "test_a_down_daemon_prints_the_unavailable_line_and_no_rows"),
+        ),
+        split(
+            "test_exit_code_zero_on_empty_state",
+            Counterpart(STATUS, "test_an_empty_state_is_an_answer_not_an_error"),
+            Counterpart(CLI, "test_an_empty_state_prints_both_sections_and_exits_zero"),
+        ),
     ),
     "IsLiveStatusTests": (
-        pending("test_up_prefix_is_live"),
-        pending("test_exited_is_not_live"),
-        pending("test_created_is_not_live"),
+        ported(
+            "test_up_prefix_is_live",
+            Counterpart(STATUS, "test_an_up_prefix_is_live"),
+        ),
+        ported(
+            "test_exited_is_not_live",
+            Counterpart(STATUS, "test_exited_is_not_live"),
+        ),
+        ported(
+            "test_created_is_not_live",
+            Counterpart(STATUS, "test_created_is_not_live"),
+        ),
     ),
     "PidAliveTests": (
-        pending("test_current_process_is_alive"),
-        pending("test_garbage_text_is_not_alive"),
-        pending("test_empty_text_is_not_alive"),
-        pending("test_dead_pid_is_not_alive"),
-        pending("test_permission_error_counts_as_alive"),
+        ported(
+            "test_current_process_is_alive",
+            Counterpart(STATUS, "test_the_current_process_is_alive"),
+        ),
+        ported(
+            "test_garbage_text_is_not_alive",
+            Counterpart(STATUS, "test_garbage_text_is_not_alive"),
+        ),
+        ported(
+            "test_empty_text_is_not_alive",
+            Counterpart(STATUS, "test_empty_text_is_not_alive"),
+        ),
+        ported(
+            "test_dead_pid_is_not_alive",
+            Counterpart(STATUS, "test_a_dead_pid_is_not_alive"),
+        ),
+        ported(
+            "test_permission_error_counts_as_alive",
+            Counterpart(STATUS, "test_a_permission_error_counts_as_alive"),
+        ),
     ),
     "HumanSizeTests": (
         pending("test_bytes"),
@@ -1013,9 +1153,20 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         excluded("test_gum_empty_selection_defers_to_default", PICKER_ISSUES),
     ),
     "ResumeRunLabelTests": (
-        pending("test_feature_run_with_recorded_outcome"),
-        pending("test_spec_run_falls_back_to_pr_open_when_no_outcome_recorded"),
-        pending("test_falls_back_to_no_pr_yet_when_neither_outcome_nor_pr_recorded"),
+        # In tests/test_status.py rather than tests/test_resume.py: `_resume_run_label`
+        # renders through `_overall_outcome`/`_age`, so it lives and is tested where they do.
+        ported(
+            "test_feature_run_with_recorded_outcome",
+            Counterpart(STATUS, "test_a_feature_run_with_a_recorded_outcome"),
+        ),
+        ported(
+            "test_spec_run_falls_back_to_pr_open_when_no_outcome_recorded",
+            Counterpart(STATUS, "test_a_spec_run_with_no_outcome_falls_back_to_pr_open"),
+        ),
+        ported(
+            "test_falls_back_to_no_pr_yet_when_neither_outcome_nor_pr_recorded",
+            Counterpart(STATUS, "test_no_outcome_and_no_pr_falls_back_to_no_pr_yet"),
+        ),
     ),
     "LatestPerBranchTests": (
         ported(
@@ -1149,12 +1300,30 @@ MANIFEST: dict[str, tuple[Entry, ...]] = {
         excluded("test_gum_ctrl_c_raises_pickabort", PICKER_BASE),
     ),
     "SummaryLinesTests": (
-        pending("test_feature_run_shows_source_issues_branch_base"),
-        pending("test_feature_run_default_issue_selection_shows_all_label"),
-        pending("test_one_off_spec_shows_spec_path_and_no_issues_line"),
-        pending("test_ad_hoc_prompt_shows_materialized_filename"),
-        pending("test_pending_ad_hoc_prompt_shows_first_line_not_yet_materialized"),
-        pending("test_created_branch_flow_shows_will_be_created_suffix"),
+        ported(
+            "test_feature_run_shows_source_issues_branch_base",
+            Counterpart(STATUS, "test_a_feature_run_shows_source_issues_branch_and_base"),
+        ),
+        ported(
+            "test_feature_run_default_issue_selection_shows_all_label",
+            Counterpart(STATUS, "test_a_default_issue_selection_shows_the_all_label"),
+        ),
+        ported(
+            "test_one_off_spec_shows_spec_path_and_no_issues_line",
+            Counterpart(STATUS, "test_a_one_off_spec_shows_its_path_and_no_issues_line"),
+        ),
+        ported(
+            "test_ad_hoc_prompt_shows_materialized_filename",
+            Counterpart(STATUS, "test_an_ad_hoc_prompt_shows_its_materialized_filename"),
+        ),
+        ported(
+            "test_pending_ad_hoc_prompt_shows_first_line_not_yet_materialized",
+            Counterpart(STATUS, "test_a_pending_ad_hoc_prompt_shows_its_first_line_not_a_path"),
+        ),
+        ported(
+            "test_created_branch_flow_shows_will_be_created_suffix",
+            Counterpart(STATUS, "test_a_branch_to_be_created_carries_the_suffix"),
+        ),
     ),
     "SummaryMenuTests": (
         excluded("test_offers_edit_issues_and_edit_base_when_applicable", PICKER_SUMMARY_MENU),

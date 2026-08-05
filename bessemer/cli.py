@@ -10,13 +10,17 @@ something it cannot, and this tool's premise is that it reports only what it can
 
 import argparse
 import os
+import sys
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Final
 
-from bessemer import __version__
+from bessemer import __version__, config, proc
 from bessemer import doctor as doctor_ops
+from bessemer import status as status_ops
+from bessemer.config import Config
 from bessemer.doctor import CheckResult
+from bessemer.outcome import Resolved, Unresolved
 
 Handler = Callable[[argparse.Namespace], int]
 
@@ -85,6 +89,82 @@ def doctor(args: argparse.Namespace) -> int:
     return doctor_ops.exit_code(report)
 
 
+DOCKER_PS_ARGV: Final = ("docker", "ps", "--format", "{{.Names}}\t{{.Status}}")
+"""The docker-side gather, ported from the port source's `run.sh` status interception:
+`NAME<TAB>STATUS` per running container. Upstream's bash gathered this and piped it to
+python over stdin; bessemer's dispatch is python, so the gather moves here — the CLI, the
+one caller allowed to ask the daemon — and `bessemer.status` is only ever handed the rows.
+"""
+
+DOCKER_PS_TIMEOUT_SECONDS: Final = 15.0
+"""A backstop, for `bessemer.doctor.TIMEOUT_SECONDS`'s reason: a wedged daemon that hangs
+`docker ps` forever must degrade status to its docker-down rendering, not hang it."""
+
+DEFAULT_RECENT_LIMIT: Final = 10
+"""How many recent runs `status` shows without `-n`. Upstream's default, kept."""
+
+
+def _docker_rows() -> tuple[list[str], bool]:
+    """What the daemon said, as `(rows, docker_down)`.
+
+    Every way of getting no answer — docker not installed (`OSError`), the daemon down or
+    unreachable (nonzero exit), a hang (`TimeoutExpired`) — collapses to `([], True)`, the
+    same collapse upstream's `run.sh` made with `|| DOCKER_DOWN=1`: `render_running` has one
+    honest line for all of them, and the ledger half of the report must render regardless.
+    """
+    try:
+        result = proc.run(DOCKER_PS_ARGV, timeout=DOCKER_PS_TIMEOUT_SECONDS)
+    except OSError, proc.TimeoutExpired:
+        return [], True
+    if not result.ok:
+        return [], True
+    return result.stdout.splitlines(), False
+
+
+def _refuse(reason: str, hint: str) -> int:
+    """A caller-error refusal: both halves on stderr, exit 2 — the usage-error exit argparse
+    already gives this CLI, and the code upstream's subcommands used for the same class."""
+    print(f"status: {reason}", file=sys.stderr)
+    print(f"{HINT_PREFIX}{hint}", file=sys.stderr)
+    return 2
+
+
+def _status_report(cfg: Config, limit: int) -> int:
+    """Gather the docker-side facts, render the view, print it."""
+    specs_setting = cfg.get("specs_dir")
+    if not isinstance(specs_setting, str):
+        return _refuse(
+            f"specs_dir is configured to {specs_setting!r}, which is not a string",
+            f"fix specs_dir in {cfg.adapter_dir / config.COMMITTED_FILE}",
+        )
+    docker_rows, docker_down = _docker_rows()
+    print(
+        status_ops.render_status(
+            specs_dir=cfg.root / specs_setting,
+            logs_dir=cfg.adapter_dir / status_ops.LOGS_DIR,
+            locks_dir=cfg.adapter_dir / status_ops.LOCKS_DIR,
+            docker_rows=docker_rows,
+            docker_down=docker_down,
+            limit=limit,
+        )
+    )
+    return 0
+
+
+def status(args: argparse.Namespace) -> int:
+    """Report what is running and what has run.
+
+    The adapter is resolved first and a failure refuses before the daemon is ever asked —
+    with no `.bessemer/` there is no ledger to report on, so there is nothing a docker
+    answer could add to the refusal.
+    """
+    match config.load(start=_start()):
+        case Resolved(value=cfg):
+            return _status_report(cfg, limit=args.limit)
+        case Unresolved(reason=reason, hint=hint):
+            return _refuse(reason, hint)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser.
 
@@ -108,6 +188,20 @@ def build_parser() -> argparse.ArgumentParser:
         description="Report whether this machine can dispatch a run.",
     )
     doctor_parser.set_defaults(handler=doctor)
+
+    status_parser = subcommands.add_parser(
+        "status",
+        help="report what is running and what has run",
+        description="Report what is running and what has run.",
+    )
+    status_parser.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=DEFAULT_RECENT_LIMIT,
+        help="how many recent runs to show (default: %(default)s)",
+    )
+    status_parser.set_defaults(handler=status)
 
     return parser
 

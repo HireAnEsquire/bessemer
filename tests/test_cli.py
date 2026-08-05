@@ -1,16 +1,22 @@
-"""Tests for the CLI surface: what it exposes, and what it reports as its version."""
+"""Tests for the CLI surface: what it exposes, what it prints, and what it exits with.
+
+`CmdStatusTest` holds the printing halves of upstream's `CmdStatusTests`, split per
+decision 5 of the F2 README; the computation halves are in `tests/test_status.py`.
+"""
 
 import argparse
 import contextlib
 import importlib.metadata
 import io
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from bessemer import cli, doctor
+from bessemer import cli, doctor, proc
 from bessemer.doctor import CheckResult
+from tests.port_manifest import ported_from
 
 
 def run_cli(*argv: str) -> tuple[int, str, str]:
@@ -115,15 +121,152 @@ class DoctorTest(unittest.TestCase):
         self.assertIsNone(run_checks.call_args.args[0].start)
 
 
-class SurfaceTest(unittest.TestCase):
-    def test_doctor_is_the_only_subcommand(self) -> None:
-        """A subcommand that exists but does nothing is a lie about what bessemer does."""
-        self.assertEqual(subcommand_names(), ["doctor"])
+class CmdStatusTest(unittest.TestCase):
+    """The printing half of upstream's `CmdStatusTests` — what `bessemer status` writes and
+    exits with. The computation half of each test is in `tests/test_status.py`, per
+    decision 5 of the F2 README.
 
-    def test_help_lists_doctor(self) -> None:
+    Two seams are replaced, and each stands in for a boundary the rewrite moved.
+    `cli._docker_rows` is the counterpart of upstream's stdin: `run.sh` gathered `docker ps`
+    rows in bash and piped them in, bessemer's CLI gathers them itself, and `tests/guard.py`
+    denies `docker` to the suite — so the gather's *result* is supplied, exactly as upstream
+    supplied stdin's. `cli._start` is the working directory, patched because the adapter
+    these tests build lives in a temporary directory rather than wherever the runner runs.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / ".bessemer" / "specs").mkdir(parents=True)
+
+    def run_status(self, *, rows: list[str], docker_down: bool) -> tuple[int, str, str]:
+        with (
+            mock.patch.object(cli, "_docker_rows", return_value=(rows, docker_down)),
+            mock.patch.object(cli, "_start", return_value=self.root),
+        ):
+            return run_cli("status")
+
+    @ported_from("CmdStatusTests", "test_reads_docker_rows_from_stdin")
+    def test_the_rows_the_gather_returned_are_printed(self) -> None:
+        code, out, _ = self.run_status(
+            rows=["bessemer-my-branch\tUp 1 minute"], docker_down=False
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("my-branch", out)
+
+    @ported_from("CmdStatusTests", "test_docker_down_does_not_read_stdin")
+    def test_a_down_daemon_prints_the_unavailable_line_and_no_rows(self) -> None:
+        code, out, _ = self.run_status(
+            rows=["bessemer-my-branch\tUp 1 minute"], docker_down=True
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("docker unavailable", out)
+        self.assertNotIn("my-branch", out)
+
+    @ported_from("CmdStatusTests", "test_exit_code_zero_on_empty_state")
+    def test_an_empty_state_prints_both_sections_and_exits_zero(self) -> None:
+        code, out, _ = self.run_status(rows=[], docker_down=False)
+
+        self.assertEqual(code, 0)
+        self.assertIn("no running tasks", out)
+        self.assertIn("no runs recorded", out)
+
+    def test_no_adapter_refuses_on_stderr_before_asking_the_daemon(self) -> None:
+        """Bessemer's own: with no `.bessemer/` there is no ledger to report on, so status
+        refuses with the loader's reason and exits 2. `_docker_rows` is deliberately left
+        unpatched — the refusal must come before any gather, and if it did not,
+        `tests/guard.py` would fail this test by refusing the `docker` spawn."""
+        bare_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(bare_tmp.cleanup)
+        with mock.patch.object(cli, "_start", return_value=Path(bare_tmp.name)):
+            code, out, err = run_cli("status")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("no .bessemer/ directory found", err)
+        self.assertIn("hint:", err)
+
+
+class DockerGatherTest(unittest.TestCase):
+    """Bessemer's own: `_docker_rows`'s failure collapse, driven through the subcommand.
+
+    No upstream oracle exists for this — the port source's gather was bash
+    (`docker ps ... || DOCKER_DOWN=1` in `run.sh`), so its collapse was never a python
+    test's to assert. `CmdStatusTest` above replaces `_docker_rows` wholesale, which
+    leaves the body unexercised; here `bessemer.proc.run` itself is replaced — the guard
+    denies `docker` to the suite — one test per way of getting no answer, each asserting
+    the unavailable line actually prints and the healthy blank does not.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / ".bessemer" / "specs").mkdir(parents=True)
+
+    def run_status_with_proc(self, run: mock.Mock) -> tuple[int, str, str]:
+        with (
+            mock.patch.object(proc, "run", run),
+            mock.patch.object(cli, "_start", return_value=self.root),
+        ):
+            return run_cli("status")
+
+    def assert_down_rendering(self, code: int, out: str) -> None:
+        """The one right answer for every arm: exit 0, the honest line, and neither the
+        healthy blank nor a row — `no running tasks` on a down daemon is a status view
+        claiming knowledge it could not have."""
+        self.assertEqual(code, 0)
+        self.assertIn("docker unavailable", out)
+        self.assertNotIn("no running tasks", out)
+        self.assertNotIn("my-branch", out)
+
+    def test_a_nonzero_docker_ps_is_docker_down(self) -> None:
+        run = mock.Mock(
+            return_value=proc.Result(
+                argv=cli.DOCKER_PS_ARGV,
+                returncode=1,
+                stdout="bessemer-my-branch\tUp 1 minute\n",
+                stderr="Cannot connect to the Docker daemon",
+            )
+        )
+
+        code, out, _ = self.run_status_with_proc(run)
+
+        self.assert_down_rendering(code, out)
+        run.assert_called_once_with(cli.DOCKER_PS_ARGV, timeout=cli.DOCKER_PS_TIMEOUT_SECONDS)
+
+    def test_a_docker_that_cannot_be_run_is_docker_down(self) -> None:
+        run = mock.Mock(side_effect=OSError("No such file or directory"))
+
+        code, out, _ = self.run_status_with_proc(run)
+
+        self.assert_down_rendering(code, out)
+
+    def test_a_docker_ps_that_hangs_is_docker_down(self) -> None:
+        run = mock.Mock(side_effect=proc.TimeoutExpired(list(cli.DOCKER_PS_ARGV), 15.0))
+
+        code, out, _ = self.run_status_with_proc(run)
+
+        self.assert_down_rendering(code, out)
+
+
+class SurfaceTest(unittest.TestCase):
+    def test_the_surface_is_exactly_doctor_and_status(self) -> None:
+        """A subcommand that exists but does nothing is a lie about what bessemer does.
+
+        Hand-written, so growing the surface costs a deliberate edit here: `{doctor}` since
+        issue 06 of F1, `{doctor, status}` since issue 04 of F2 — the two commands a human
+        types today, and nothing else."""
+        self.assertEqual(subcommand_names(), ["doctor", "status"])
+
+    def test_help_lists_every_subcommand(self) -> None:
         code, out, _ = run_cli("--help")
         self.assertEqual(code, 0)
         self.assertIn("doctor", out)
+        self.assertIn("status", out)
 
     def test_no_subcommand_prints_usage_and_exits_two(self) -> None:
         """F5's picker will claim this slot; this test is expected to change then."""

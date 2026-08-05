@@ -86,12 +86,13 @@ class DispatchError(Exception):
     """A blocker violation or unresolvable selection — refuse before any container starts."""
 
 
-def _leading_number(text: str) -> int | None:
+def leading_number(text: str) -> int | None:
     """The first run of digits anywhere in `text`, as an int.
 
     Named for how it is used — the leading number of `02-core.md` — but it searches rather
     than anchors, which is what lets `Blocked by: 01, 03` and a title like `# 02 — core`
-    both parse. Ported as it stands.
+    both parse. Ported as it stands. Public because `bessemer.status`'s summary-line
+    helpers parse an `--issues` argument with it (decision 7 of the F2 README).
     """
     m = _NUMBER_RE.search(text)
     return int(m.group()) if m else None
@@ -118,11 +119,11 @@ def parse_issue(path: Path) -> Issue:
         if m:
             fields[m.group(1).lower()] = m.group(2).strip()
     blocked_by = [
-        n for tok in fields["blocked by"].split(",") if (n := _leading_number(tok)) is not None
+        n for tok in fields["blocked by"].split(",") if (n := leading_number(tok)) is not None
     ]
-    number = _leading_number(path.stem)
+    number = leading_number(path.stem)
     if number is None:
-        number = _leading_number(title)
+        number = leading_number(title)
     issue_type = fields["type"].strip().upper() or DEFAULT_TYPE
     return Issue(
         path=path,
@@ -183,7 +184,7 @@ def select_issues(feature_dir: Path, issues_arg: str | None) -> list[Issue]:
             tok = raw.strip()
             if not tok:
                 continue
-            n = _leading_number(tok)
+            n = leading_number(tok)
             if n is None:
                 raise DispatchError(f"--issues: can't parse a number from '{tok}'")
             requested.append(n)
@@ -309,7 +310,7 @@ def issue_summary(issues: Mapping[str, str]) -> str:
         # A named function rather than upstream's lambda, which called `_leading_number`
         # twice and read as `int | None` to a type checker. Same ordering, including the
         # 0 for a key with no digits in it.
-        number = _leading_number(key)
+        number = leading_number(key)
         return 0 if number is None else number
 
     marks = []

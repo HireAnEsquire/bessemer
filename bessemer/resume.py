@@ -247,7 +247,9 @@ def is_protected(branch: str) -> bool:
     return branch.strip().lower() in PROTECTED_BRANCHES
 
 
-def _first_line(text: str) -> str:
+def first_line(text: str) -> str:
+    """The first non-blank line of `text`, or `""`. Public because `bessemer.status`'s
+    summary-line helpers render a pending prompt by it (decision 7 of the F2 README)."""
     return next((line for line in text.splitlines() if line.strip()), "")
 
 
@@ -269,7 +271,7 @@ def _branch_name_suggestion(
     if feature:
         return feature
     if prompt_text is not None:
-        return slugify(_first_line(prompt_text))
+        return slugify(first_line(prompt_text))
     assert spec is not None
     name = Path(spec).name
     return name[: -len(".md")] if name.endswith(".md") else name

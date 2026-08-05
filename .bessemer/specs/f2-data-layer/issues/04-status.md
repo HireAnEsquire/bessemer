@@ -1,6 +1,6 @@
 # 04 — Status: scanning what is running, rendering what has run
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 00, 02
 
@@ -67,6 +67,15 @@ exclusion; do not "restore" it.
       is one refactor away from two renderings, and the docstring claims otherwise
 - [ ] No `render_*` function prints. A test asserts the return type is a list of strings,
       and `tests/test_cli.py` holds the printing half of `CmdStatusTests`
+- [ ] **`SurfaceTest`'s hand-written pin grows from `{doctor}` to `{doctor, status}` — and
+      that is the only loosening.** Issues 01–03 each ordered `test_cli.py` untouched; this
+      is the first issue allowed to touch it, because `status` is a subcommand a human
+      types. The pin exists so that growing the surface costs a deliberate edit; make the
+      edit, and nothing else in that file gets weaker. This is also where `ported-split`
+      fires on real data for the first time — both destinations recorded, computation half
+      in `tests/test_status.py`, rendering half in `tests/test_cli.py`. If it turns out not
+      to fire, stop and report rather than excluding: `CmdStatusTests` is not a shim by
+      decision 5's own test, because a human types `status`
 - [ ] `bessemer/status.py` spawns no subprocess — `parse_docker_rows` is handed rows
 - [ ] `bessemer status` renders from a ledger written by issue 02's `append_ledger`, not
       from a fixture. That round trip is F2's tracer and this issue is where it first works

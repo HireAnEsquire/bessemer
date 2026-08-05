@@ -169,6 +169,13 @@ Five, settled before any issue was written.
    by name. Changing a value to satisfy vocabulary is changing what the code does, which is
    the one thing a port must not do quietly.
 
+   The edge of that rule, settled in issue 04: **a product-name literal in fixture *inputs*
+   renames; a value inside an assertion never does.** `CONTAINER_PREFIX` is `bessemer-`
+   where upstream wrote `agentbox-` — the prefix is upstream's product name, it appears in
+   docker-row fixtures as input only, and bessemer has zero installs so no `agentbox-*`
+   container it should recognise can exist. The assertions over the parsed slugs are
+   unchanged. This binds issue 05's fixtures and names F3's containers: `bessemer-<slug>`.
+
    **A helper another F2 issue needs is public.** Upstream's privacy conventions were
    written for one 2325-line file; bessemer splits it across five modules, so
    `issue_summary` and `slugify` are public because issues 03 and 04 call them. Decide by
@@ -307,6 +314,13 @@ Five, settled before any issue was written.
    construction sites leaves bessemer's 44 resume tests green. F3's dispatch consumes it —
    the F3 issue that does must land the assertion upstream never wrote.
 
+   A third, from issue 04: **dispatch must write where status reads.** `bessemer status`
+   reads logs at `.bessemer/logs`, locks at `.bessemer/locks`, and containers named
+   `bessemer-<slug>` — upstream's `$BOX/logs`, `$BOX/locks`, `agentbox-` renamed. Nothing
+   enforces the rendezvous yet: an F3 dispatch that writes anywhere else makes status render
+   a healthy blank over live runs, which is the worst thing a status command can do. The F3
+   issue that starts containers owns the round-trip test.
+
 ## Sequence
 
 `00` blocks everything. The four port issues are independent of each other and share only
@@ -317,8 +331,8 @@ the manifest.
 | `00` | Port manifest: all 337 upstream tests, classified | 56 | 337 | — |
 | `01` | Issues: parse, select, spec resolution, status writes | 9 | 38 | 00 |
 | `02` | Ledger: read, append, branch helpers, resolve-last | 10 | 37 | 00 |
-| `03` | Resume: resolve, dispatch action, branch naming | 9 | 42 | 00, 02 |
-| `04` | Status: docker rows, locks, age, render | 12 | 50 | 00, 02 |
+| `03` | Resume: resolve, dispatch action, branch naming | 8 | 39 | 00, 02 |
+| `04` | Status: docker rows, locks, age, render | 13 | 53 | 00, 02 |
 | `05` | gc: scan, summarize, render a plan | 7 | 30 | 00, 02, 04 |
 
 **These counts are computed from the manifest, not eyeballed.** An earlier draft carried
@@ -327,6 +341,10 @@ were guessed from class names before the manifest existed. The five sets above a
 cover all 47 pending classes, and sum to exactly 197. That was verified by partitioning the
 manifest programmatically rather than by adding the column up, which is the same instrument
 failure this feature has now produced four times.
+
+The 03/04 rows moved 42/50 → 39/53 when `ResumeRunLabelTests` moved between them (see issue
+03), found by issue 04's implementer as a two-files-two-counts disagreement — the exact
+defect shape this table's own paragraph warns about, one paragraph up.
 
 `04` was one issue of 80 tests and 19 classes before the split — twice the size of anything
 F1 shipped. gc separates cleanly: it is a scan that returns a plan, and it needs `04`'s

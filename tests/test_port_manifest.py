@@ -157,8 +157,8 @@ UPSTREAM_CLASS_COUNTS = {
 # first `PORTED_SPLIT`. There is no computation half to split off: the computation has its
 # own class, `StripFeedbackEditTextTests`, and the command is a three-line shim that exists
 # only because the port source's `run.sh` is bash and had to spawn python to reach a
-# function. So the class is excluded whole and `PORTED_SPLIT` has still never fired on real
-# data — issue 02 or 04 settles it.
+# function. So the class is excluded whole. Issue 04 settled the open question: `status` is
+# a subcommand a human types, so `CmdStatusTests` is where `PORTED_SPLIT` first fired.
 WHOLLY_EXCLUDED_CLASSES = frozenset(
     {
         "PickTaskSourceTests",
