@@ -12,6 +12,12 @@ may send itself.
 **Read this whole file before starting step 1.** Steps 2 and 3 are deliberate failures on a real
 branch, and step 2 asks you to edit a committed file and put it back.
 
+**Paste each step's evidence before starting the next one.** Log rotation is single-generation,
+`.log → .log.1`, and every step dispatches the same branch — so by step 3 the log for step 1 is
+already gone and unrecoverable. The 2026-08-06 run lost steps 1 and 2 this way; see
+[`f3-tracer-report.md`](f3-tracer-report.md), finding 4. A run per branch would avoid it and is
+worth considering next time.
+
 ---
 
 ## Before you start
@@ -155,11 +161,30 @@ Then, in order:
 ```
 docker ps --filter name=bessemer- --format '{{.Names}}\t{{.Status}}'
 ls -l .bessemer/locks .bessemer/checkouts
-uvx --refresh --from . bessemer gc
+uvx --refresh --from . bessemer gc                       # expect: nothing to reclaim — see below
+docker stop bessemer-tracer-dogfood                      # the manual step, and the finding
+uvx --refresh --from . bessemer gc                       # now: container + checkout + lock
 uvx --refresh --from . bessemer gc --force
 uvx --refresh --from . bessemer gc
 git log --oneline -3 tracer-dogfood
 ```
+
+**The `docker stop` is the finding, not a workaround.** Killing the dispatcher does not kill the
+container: the image's entrypoint is `sleep infinity`, so it stays `Up` forever, and `gc` treats
+any `Up` container as a live run — which hides the container, the checkout **and** the lock from
+the scan permanently. The first `gc` above therefore prints `nothing to reclaim` while dispatch's
+own guard refuses the branch as busy. Full analysis in
+[`f3-tracer-report.md`](f3-tracer-report.md), finding 1; until it is settled, the manual stop is
+what gets you to the remedy.
+
+`stop` rather than `rm -f`, deliberately: an exited container still appears in `docker ps -a`, so
+the listing shows all three classes and reclaim's container arm gets exercised. `rm -f` erases
+the row and you see two.
+
+**Kill late enough to prove salvage.** Wait until the log shows the agent has *committed*, not
+merely started. On the 2026-08-06 run the kill landed at `claude > Bash: cat /spec.md`, so the
+checkout held nothing the branch did not already have and salvage was a no-op fast-forward —
+which leaves "salvage rescues work that exists nowhere else" unproven.
 
 **Evidence to paste:**
 
@@ -187,18 +212,34 @@ and capture it a second time:
 
 ```
 SLUG=tracer-dogfood
-shasum .bessemer/logs/$SLUG.log; cat .bessemer/locks/$SLUG.pid; docker ps -q -f name=bessemer-$SLUG
+probe() { ls -li .bessemer/logs/$SLUG.log; head -1 .bessemer/logs/$SLUG.log; \
+          cat .bessemer/locks/$SLUG.pid; docker ps -q -f name=bessemer-$SLUG; }
+probe
 uvx --refresh --from . bessemer run tracer-oneoff.md --branch tracer-dogfood   # expect a refusal
-shasum .bessemer/logs/$SLUG.log; cat .bessemer/locks/$SLUG.pid; docker ps -q -f name=bessemer-$SLUG
+probe
 ```
+
+**Not the log's checksum.** A live run appends to that file continuously, so its bytes change
+whether or not the refusal touched it — measured on the 2026-08-06 run, where the checksum moved
+and the refusal was entirely innocent (report, finding 2). What a refusal must not have done is
+**rotate** the log, so the controls are the inode, the first line and the size.
 
 **Evidence to paste:**
 
-- the refusal message, and which of the two guards fired (the lock's pid, or the live container)
-- both triples, side by side: the log's checksum, the lock's pid and the container id must be
-  **identical** before and after. A rotated log, a rewritten lock or a restarted container would
-  each mean the refusal happened after something had already been done
+- the refusal message, and which of the two guards fired. The lock is checked first, so a
+  lock-layer refusal is the expected one; a container-layer refusal means the recorded pid was
+  dead, which is a different story and worth telling
+- both probes, side by side: the log's **inode** and **first line** identical, its size only
+  grown, the lock's pid and the container id identical
+- `ls -l .bessemer/logs/` — `.log.1` must still hold the *previous* run rather than this one
 - confirmation that the first run then finished normally
+
+One line before the refusal is expected, not a violation — `base_ref` consults the ledger ahead
+of the guard, and printing the choice is decision 4's named mitigation:
+
+```
+bessemer: --base omitted — using 'tracer-dogfood' branch's last recorded base from runs.jsonl: main
+```
 
 ---
 
@@ -227,3 +268,7 @@ had not yet run it; the gap between that and what actually happened is the whole
 dogfood. A step that was ambiguous, a command that needed a flag this file does not mention, an
 error message that named the wrong thing, a piece of evidence that turned out to prove nothing —
 each is a finding, and each belongs in the report next to what you did instead.
+
+**The 2026-08-06 run produced eight**, and this file has been corrected against three of them
+(steps 2, 3 and 4). The rest are in [`f3-tracer-report.md`](f3-tracer-report.md); the first —
+`gc` cannot see a SIGKILL leak — is a spec claim that measurement refuted, and is open.

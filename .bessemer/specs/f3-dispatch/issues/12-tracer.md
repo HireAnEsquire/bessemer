@@ -1,8 +1,18 @@
 # 12 — tracer: first dogfood
 
-Status: Todo
+Status: Done
 Type: HITL
 Blocked by: 10, 11
+
+**Run 2026-08-06. Report: [`docs/f3-tracer-report.md`](../../../../docs/f3-tracer-report.md).**
+All five runbook items executed. Four behaved as specified; item 3 refuted its own spec claim —
+`gc` cannot see a SIGKILL leak while the container is `Up`, and the container is `Up` forever.
+That finding is open and is the tracer's most valuable output. Eight findings in all; three have
+already been folded back into the runbook.
+
+The blocker this issue names was real and is cleared — and there was a second one it did not
+name: the image carried no `make`, which is what both prompt overrides tell the agent to run.
+Both were caught by the tier-3 suite before the human dispatched anything.
 
 ## What this is
 

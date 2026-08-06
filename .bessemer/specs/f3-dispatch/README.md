@@ -574,6 +574,19 @@ over. Tier 3, run by the human, on a scratch branch of this repo. Criteria, rule
      lists the orphans, `gc --force` reclaims them with salvage. **This is the designed
      leak meeting its designed remedy, and `reclaim.py`'s live proof — no tier-2 test
      can give it.**
+
+     **Refuted by the tracer, 2026-08-06 — the claim above is false as written, and is
+     left standing rather than edited because it is what the run disproved.** `gc` lists
+     nothing: the container's entrypoint is `sleep infinity`, so a killed dispatcher
+     leaves it `Up` forever, and `gc.collect_gc_items` treats any `Up` container as a live
+     run — hiding the container, the checkout *and* the lock from the scan permanently.
+     Dispatch's in-flight guard sees the same container and refuses the branch, so the run
+     is wedged: un-dispatchable and un-reclaimable, remedy `docker rm -f` by hand. The pin
+     excludes live containers the same way (`run.sh:462–474`), so this is inherited rather
+     than a translation error, and whether to keep inheriting it is an open decision.
+     `reclaim.py` itself is sound — stopping the container by hand produced the
+     three-class listing and a clean salvage-and-reclaim. Full analysis:
+     [`docs/f3-tracer-report.md`](../../../docs/f3-tracer-report.md), finding 1.
   3. Duplicate dispatch on the same branch while one runs → refused, live run untouched.
      **The live proof of decision 6.1's refusal ordering** — the evidence being
      collected is that the first run's log, lock, and container are exactly as before
