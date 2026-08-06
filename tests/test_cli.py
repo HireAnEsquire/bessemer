@@ -332,13 +332,15 @@ class CmdGcTest(unittest.TestCase):
 
 
 class SurfaceTest(unittest.TestCase):
-    def test_the_surface_is_exactly_doctor_status_and_gc(self) -> None:
+    def test_the_surface_is_exactly_doctor_status_gc_and_run(self) -> None:
         """A subcommand that exists but does nothing is a lie about what bessemer does.
 
         Hand-written, so growing the surface costs a deliberate edit here: `{doctor}` since
         issue 06 of F1, `{doctor, status}` since issue 04 of F2, `{doctor, status, gc}`
-        since issue 05 — the three commands a human types today, and nothing else."""
-        self.assertEqual(subcommand_names(), ["doctor", "status", "gc"])
+        since issue 05, `+ run` since issue 10 of F3 — the four commands a human types
+        today, and nothing else. `run` is the only loosening F3 makes, and it arrives with
+        a dispatcher behind it rather than as the stub IMPLEMENTING.md bans."""
+        self.assertEqual(subcommand_names(), ["doctor", "status", "gc", "run"])
 
     def test_help_lists_every_subcommand(self) -> None:
         code, out, _ = run_cli("--help")
@@ -346,6 +348,27 @@ class SurfaceTest(unittest.TestCase):
         self.assertIn("doctor", out)
         self.assertIn("status", out)
         self.assertIn("gc", out)
+        self.assertIn("run", out)
+
+    def test_run_takes_a_positional_spec_a_required_branch_and_an_optional_base(self) -> None:
+        """F3 README decision 4's flag set, complete: nothing else exists on this parser.
+
+        Hand-written beside the surface pin above and for its reason — the flags a dispatch
+        accepts are the whole of what a human may ask it for at F3, and `--feature`,
+        `--resume`, `--feedback` and `--hard-reset` are F4's to add with the mechanisms
+        behind them."""
+        parsed = cli.build_parser().parse_args(["run", "spec.md", "--branch", "work"])
+        self.assertEqual(parsed.spec, "spec.md")
+        self.assertEqual(parsed.branch, "work")
+        self.assertIsNone(parsed.base)
+
+        code, _, err = run_cli("run", "spec.md")
+        self.assertEqual(code, 2)
+        self.assertIn("--branch", err)
+
+        code, _, err = run_cli("run", "spec.md", "--branch", "work", "--feature", "f")
+        self.assertEqual(code, 2)
+        self.assertIn("unrecognized arguments", err)
 
     def test_no_subcommand_prints_usage_and_exits_two(self) -> None:
         """F5's picker will claim this slot; this test is expected to change then."""

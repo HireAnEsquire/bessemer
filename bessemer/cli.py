@@ -11,11 +11,14 @@ something it cannot, and this tool's premise is that it reports only what it can
 import argparse
 import os
 import sys
+import time
 from collections.abc import Callable, Iterator, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from bessemer import __version__, config, proc
+from bessemer import __version__, config, proc, resolve
+from bessemer import dispatch as dispatch_ops
 from bessemer import doctor as doctor_ops
 from bessemer import gc as gc_ops
 from bessemer import status as status_ops
@@ -209,6 +212,68 @@ def gc(args: argparse.Namespace) -> int:
             return _refuse("gc", reason, hint)
 
 
+def _dispatch(cfg: Config, start: Path | None, args: argparse.Namespace) -> int:
+    """Compose the real seams and run one dispatch. The whole of the CLI's half of a run.
+
+    Root agreement is resolved here rather than inside `bessemer.dispatch`, and it is the one
+    guard that lives on this side: `resolve.resolve_root_agreement` spawns git through
+    `proc.run` directly rather than through the seam a dispatch is handed, so asking it there
+    would put a real git repository behind every tier-2 orchestration test. It refuses exactly
+    as `config.load` does, two lines above, and the agreed root travels on as a fact.
+
+    Everything after it is the composition ADR 0003 names: the real `proc.run` and
+    `proc.streamed`, the real clocks, this process's pid and environment. A test composes the
+    recording double at the same seam.
+    """
+    match resolve.resolve_root_agreement(cfg, start=start):
+        case Unresolved(reason=reason, hint=hint):
+            return _refuse("run", reason, hint)
+        case Resolved(value=repo_root):
+            pass
+
+    try:
+        dispatch_ops.dispatch(
+            cfg=cfg,
+            repo_root=repo_root,
+            start=start,
+            spec=args.spec,
+            branch=args.branch,
+            base=args.base,
+            env=os.environ,
+            pid=os.getpid(),
+            console=print,
+            run=proc.run,
+            streamer=proc.streamed,
+            sleep=time.sleep,
+            clock=time.monotonic,
+            now=datetime.now,
+        )
+    except (dispatch_ops.Refusal, dispatch_ops.RunFailed) as stopped:
+        # Both halves print the same way and exit the same way, because the difference between
+        # them is what the machine looks like afterwards rather than what the operator reads:
+        # a refusal touched nothing, a failure has a log with the reason in it — which the
+        # message names either way.
+        print(f"{dispatch_ops.REFUSAL_PREFIX}{stopped}", file=sys.stderr)
+        return 1
+    print(dispatch_ops.FINISHED)
+    return 0
+
+
+def run(args: argparse.Namespace) -> int:
+    """Dispatch one spec on one branch.
+
+    Same shape as `status` and `gc`: the adapter is resolved first, and a failure refuses
+    before anything else is asked — with no `.bessemer/` there is no image, no prompt override
+    and nowhere to write a log.
+    """
+    start = _start()
+    match config.load(start=start):
+        case Resolved(value=cfg):
+            return _dispatch(cfg, start, args)
+        case Unresolved(reason=reason, hint=hint):
+            return _refuse("run", reason, hint)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser.
 
@@ -258,6 +323,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the reclaimable items as machine-readable TSV instead of a table",
     )
     gc_parser.set_defaults(handler=gc)
+
+    run_parser = subcommands.add_parser(
+        "run",
+        help="dispatch a run: one spec, on one branch, landing as a draft pull request",
+        description="Dispatch a run: one spec, on one branch, landing as a draft PR.",
+    )
+    run_parser.add_argument("spec", help="the spec to run, relative to the specs directory")
+    run_parser.add_argument(
+        "--branch",
+        required=True,
+        help="the working branch to fork from, commit to and push back to (required)",
+    )
+    run_parser.add_argument(
+        "--base",
+        help=(
+            "the ref the pull request targets and diffs against; omitted, the branch's last "
+            "recorded base wins, then config, then origin/HEAD"
+        ),
+    )
+    run_parser.set_defaults(handler=run)
 
     return parser
 

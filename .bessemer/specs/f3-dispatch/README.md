@@ -25,33 +25,33 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 |---|---|---|---|---|
 | 1–228 | header doc, config comment | reference only | — | — |
 | 230–280 | roots, `.env` source, `have_claude_credential`, `image_staleness` | F3 (staleness is F5's) | 01, 09 | `tests.test_container.CredentialPresenceTest` (part) |
-| 282–301 | `status` intercept (docker-rows gathering) | F2 done; debt 3 wiring F3 | 10 | — |
+| 282–301 | `status` intercept (docker-rows gathering) | F2 done; debt 3 wiring F3 | 10 | `tests.test_dispatch.RoundTripTest` |
 | 303–420 | `doctor` frame | F1, done | — | — |
 | 422–523 | `gc --force`: re-check, salvage-fetch, delete | **F3** (decision 1) | 11 | — |
 | 525–540 | config defaults: image, base, rounds, timeout, pids, memory, notify | F3 subset (notify verbosity excluded) | 01 | `test_config.SchemaTest` |
-| 542–596 | flag parse; feedback-conflict guards | F3 subset of flags | 10 | — |
+| 542–596 | flag parse; feedback-conflict guards | F3 subset of flags | 10 | `tests.test_cli.SurfaceTest` |
 | 598–679 | no-arg picker, branch-creation carve-out | F5 | — | — |
 | 681–715 | `--last` | F4 | — | — |
 | 717–776 | `--resume` recovery wiring | F4 | — | — |
-| 779–820 | mode validation, spec path resolution | F3 (spec path only) | 10 | — |
-| 826–832 | `TASK_DIR` recorded fact | F3 | 10 | — |
+| 779–820 | mode validation, spec path resolution | F3 (spec path only) | 10 | `tests.test_dispatch.GuardTest` |
+| 826–832 | `TASK_DIR` recorded fact | F3 | 10 | `tests.test_dispatch.HappyPathTest` |
 | 837–873 | resume guard | F4 | — | — |
-| 875–888 | `--base` ledger default chain | F3 (decision 4) | 10 | — |
+| 875–888 | `--base` ledger default chain | F3 (decision 4) | 10 | `tests.test_dispatch.BaseChainTest` |
 | 890–925 | `--feedback-edit` editor flow | F4 | — | — |
-| 927–940 | branch guards: exists, protected, base≠branch, not checked out | F3 | 10 | — |
-| 942–952 | preflight: docker, gh, credential, image presence | F3 | 09, 10 | `tests.test_doctor` (part) |
-| 954–1002 | fetch, `BASE_SHA`, merge-base; `--hard-reset` block | F3 / hard-reset F4 | 10 | — |
-| 1004–1021 | `check_no_inflight_run` (lock pid + container name) | F3 | 10 | — |
-| 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | `tests.test_passes` (part) |
-| 1132–1190 | slug/lock/log derivation, stale cleanup, cleanup trap | F3 | 04, 10 | `tests.test_checkout` (part) |
+| 927–940 | branch guards: exists, protected, base≠branch, not checked out | F3 | 10 | `tests.test_dispatch.GuardTest` |
+| 942–952 | preflight: docker, gh, credential, image presence | F3 | 09, 10 | `tests.test_doctor`, `tests.test_dispatch.GuardTest` |
+| 954–1002 | fetch, `BASE_SHA`, merge-base; `--hard-reset` block | F3 / hard-reset F4 | 10 | `tests.test_dispatch.HappyPathTest` (part) |
+| 1004–1021 | `check_no_inflight_run` (lock pid + container name) | F3 | 10 | `tests.test_dispatch.RefusedDispatchTest` |
+| 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | `tests.test_passes`, `tests.test_dispatch` |
+| 1132–1190 | slug/lock/log derivation, stale cleanup, cleanup trap | F3 | 04, 10 | `tests.test_checkout`, `tests.test_dispatch` |
 | 1203–1282 | checkout clone, container run, setup hook invocation | F3 | 04, 06 | `tests.test_checkout`, `tests.test_container` |
 | 1292–1431 | feature loop, per-issue `Status:` writes, checklist merge | F4 | — | — |
-| 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | `tests.test_passes` (part) |
+| 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | `tests.test_passes`, `tests.test_dispatch.PromptTest` |
 | 1494–1527 | review loop, verdict break | F3 | 07 | `tests.test_passes` |
 | 1529–1592 | push, PR-description pass, draft PR open/update | F3 | 08 | `tests.test_landing` (part) |
-| 1594–1644 | end notification, ledger append | F3 | 10 | — |
+| 1594–1644 | end notification, ledger append | F3 | 10 | `tests.test_dispatch.HappyPathTest` |
 | 1647–1724 | `--dry-run` plan | F5 | — | — |
-| 1726–1732 | dispatch entry | F3 | 10 | — |
+| 1726–1732 | dispatch entry | F3 | 10 | `tests.test_cli`, `tests.test_dispatch` |
 
 (The host-side stream filter — decision 5.1's divergence — has no run.sh row; its oracle
 is `.agentbox/stream-filter.py` at the pin, owned by issue 05 — landed 2026-08-05, pinned
@@ -113,6 +113,54 @@ runs cannot authenticate — both backwards. So the resolver answers about **bot
 separately**, doctor FAILs the exported-only one naming the file as the fix, and
 `Credential.present` keeps the pin's union available for issue 10 to refuse on deliberately.
 That closes `bessemer/container.py`'s residual 2 rather than deferring it.
+
+Issue 10 landed 2026-08-06: `bessemer/dispatch.py` and the CLI's `run` subcommand close every
+row above that was still open or part-covered — the flag parse, spec resolution, the base
+chain, the four branch guards, the preflight's refusals, fetch/`BASE_SHA`/merge-base, the
+in-flight guard, say/banner/step and notify, slug/lock/log derivation and the cleanup trap, the
+dispatcher's generated preamble, the end notification and the ledger append, and the entry.
+`954–1002` stays **(part)** for one reason and it is not an omission: the `--hard-reset` block
+inside it is F4's, named in decision 1.
+
+Five things arrived with it, recorded here rather than in the ADR because they are the port's
+divergences rather than the package's shape:
+
+1. **The description pass runs before the push, and runs unconditionally.** The pin pushes,
+   then generates the description, then opens the pull request (`:1548`, `:1572`); decision
+   8.2 made `landing.land` take the description as a *value*, so the pass has to produce its
+   text first. It therefore also runs on a run that will have nothing to push, where the pin
+   skips it inside the `[ "$commits" -gt 0 ]` arm. The alternative is a second commit count in
+   `dispatch.py`, free to disagree with the one `landing` owns as its gate — a worse trade for
+   one wasted pass on a rare path.
+2. **The setup step's label is not the pin's.** "settings templates + postgres + client deps"
+   names one adapter's three jobs, and core runs exactly one setup command: the hook.
+3. **`FAILED during step N/6` drops the pin's `(exit $rc)`.** Bash's trap reads `$?`; the
+   Python equivalent is the exception being unwound, whose own text is the line above it in the
+   same log.
+4. **Stale cleanup moved inside the `try`.** The pin arms its trap last because `cleanup` reads
+   variables that are not set until then; Python has no such constraint, and a stale removal
+   that fails must release the lock it just took rather than leak it. Decision 6.1's *order* is
+   otherwise unchanged, and the refused-dispatch test asserts it on both channels.
+5. **An exported-only credential is a loud warning, not a second refusal.** Preflight refuses
+   on `Credential.present`, which is the pin's union, exactly as this README's issue-09 note
+   left available "for issue 10 to refuse on deliberately". The machine whose credential never
+   crosses is one `doctor` already FAILs by name, so dispatch says so on the console and in the
+   run log instead of inventing a refusal the pin does not have.
+
+6. **Three small ones, recorded so they are not found later as bugs.** The failure
+   notification keeps the pin's `— see log` and drops only `(exit $rc)`, for (3)'s reason. The
+   `cleanup` banner lands *below* the failure line where the pin prints it above, because
+   Python runs `except` before `finally` and there is one of each. And the entry banner
+   truncates the base sha it already holds instead of spawning the pin's second
+   `git rev-parse --short` (`:1730`) — a spawn for a display string is a spawn that can fail,
+   and the number is longer rather than different.
+
+**And the ruling issue 10 owed** (acceptance criterion 7): the implement prompt's SPEC section
+names `/spec.md` and the dispatcher's generated preamble (`:1476–1477`) repeats it — **kept**.
+hae's F7 overrides restore its template text byte for byte and the parity gate compares
+*assembled* prompts, so dropping the repetition would make every F3 prompt differ from the
+pin's for a tidiness nobody asked for. `tests.test_dispatch.PromptTest` holds it, so the
+duplication is a decision with a test on it rather than an oversight.
 
 `:1210–1212`'s `client/node_modules` pre-create was recorded here at issue 04 as hae adapter
 content, excised and owed no test. **Corrected at issue 06, 2026-08-05:** the *path* is hae's

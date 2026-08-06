@@ -64,6 +64,25 @@ home, and nowhere else.
   on nothing in the package, and importing `Result` there would break it. Tier-2 tests
   assert through the policy function; a composition site that bypasses it is the defect.
 
+- **Root agreement is resolved by the CLI and reaches `dispatch` as a parameter** (added at
+  issue 10, 2026-08-06). `resolve.resolve_root_agreement` is the one guard in the run path
+  that does not run on the seam `dispatch` is handed: it spawns git through `proc.run`
+  directly, because `bessemer.resolve` predates the seam and every other caller of it is
+  doctor. Asking it inside `dispatch` would therefore put a real git repository behind every
+  tier-2 orchestration test in exchange for a refusal `bessemer.cli` can already print —
+  which it does, in the same two lines it refuses a `config.load` with. The agreed root then
+  travels as `repo_root`, a git question answered rather than defaulted (F2 decision 9), and
+  everything past it runs on the seam.
+
+  **Stated precisely, because the near-miss is the thing worth recording:** `bessemer.resolve`
+  is the one module in the run path that spawns outside the seam, and `dispatch` still calls
+  the *other* half of it — `resolve_base`, the base chain's bottom rung — which is why
+  `tests/test_dispatch.py::BaseChainTest` needs a real temporary repository for exactly one
+  test and nothing else does. The difference is that the bottom rung is reached only when
+  nothing above it answered, and root agreement is asked on every run. So the narrowing to
+  "the only module the CLI calls" is one resolver call, not one resolver. Both move inside when
+  `resolve` takes a runner.
+
 - **Deliberate non-seams, recorded because a non-seam is a decision too:**
   - *notify* is a private function in `dispatch.py` — one consumer, no variation until
     F4's verbosity config; one adapter is a hypothetical seam. F4 promotes it if the

@@ -375,7 +375,13 @@ def spec_check_path(specs_dir: Path, spec: str) -> Path:
     The port source's own comment here named the interactive picker as the caller that must
     mirror this ("the picker's existence check must mirror that exactly"). **The picker is
     not ported** — decision 1 of the F2 README puts it out of scope — so the constraint is
-    recorded here for whoever lands it, and points at nothing in this tree today.
+    recorded here for whoever lands it at F5.
+
+    **The live referent is `bessemer.dispatch`** (F3 issue 10, 2026-08-06). It calls this and
+    adds the one thing missing: the existence hard error, `!! spec not found: <path>`
+    (run.sh:818). Resolution itself is not duplicated there and must not be — the picker
+    arriving later has to mirror *this* function, and a second resolver would give it two
+    things to mirror.
     """
     name = spec if spec.endswith(".md") else f"{spec}.md"
     if "/" in spec:

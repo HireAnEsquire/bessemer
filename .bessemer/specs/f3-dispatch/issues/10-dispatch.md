@@ -1,6 +1,6 @@
 # 10 — dispatch: the assembly
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 01, 02, 03, 04, 06, 07, 08, 09
 
@@ -55,25 +55,26 @@ no exec after the liveness check.
 
 ## Acceptance criteria
 
-- [ ] Guard-order sequence assertion over the recorded stream; each guard's refusal
+- [x] Guard-order sequence assertion over the recorded stream; each guard's refusal
       message ported
-- [ ] **Refused-dispatch absence assertion on both channels**: proc stream empty from
+- [x] **Refused-dispatch absence assertion on both channels**: proc stream empty from
       the guard onward AND tmp tree byte-identical — no lock, no rotation, no log write
       (README decision 6.1)
-- [ ] Lock: two dispatches racing the same branch — `O_EXCL` loser reports the winner's
+- [x] Lock: two dispatches racing the same branch — `O_EXCL` loser reports the winner's
       pid; divergence note in the code
-- [ ] The four failure scenarios, plus the happy path, each asserting the full argv
+- [x] The four failure scenarios, plus the happy path, each asserting the full argv
       sequence and final state
-- [ ] Debt 3 round-trip green; mutate `LOGS_DIR` rendezvous and it fails (prove,
+- [x] Debt 3 round-trip green; mutate `LOGS_DIR` rendezvous and it fails (prove,
       restore)
-- [ ] Path-typed inputs end-to-end; the ledger line's JSON round-trips
-- [ ] Resolve or keep, stated either way: the implement prompt's SPEC section names
+- [x] Path-typed inputs end-to-end; the ledger line's JSON round-trips
+- [x] **Resolved: keep** (README, issue 10's note; `PromptTest`) — the implement prompt's
+      SPEC section names
       `/spec.md` and the dispatcher's generated preamble (the pin assembles at
       run.sh:1476) repeats it — inherited duplication flagged by issue 03's implementer.
       Keeping it is legal (it is the pin's shape); silently shipping both without a ruling
       is not
-- [ ] SurfaceTest pin updated by hand; base chain exercised at three depths (flag,
+- [x] SurfaceTest pin updated by hand; base chain exercised at three depths (flag,
       ledger, auto-detect)
-- [ ] No stderr fragment in notification text or any agent-visible string — through
+- [x] No stderr fragment in notification text or any agent-visible string — through
       issue 02's policy, asserted
-- [ ] `make check` green
+- [x] `make check` green
