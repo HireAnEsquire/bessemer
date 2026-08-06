@@ -46,8 +46,8 @@ the variable, red on the one that does not.
 `git` and the interpreter and deliberately does *not* allowlist `uv` or `docker`: a suite
 permitted to run `docker` is one image pull away from network access on a contributor's
 laptop, and ADR 0002 requires the suite to pass with no daemon at all. The seam is what makes
-checks 1 and 6 testable without widening that allowlist, so the argv they would spawn is
-pinned by a test that reads it off a stand-in runner rather than by one that spawns it.
+the three spawning checks testable without widening that allowlist, so the argv they would
+spawn is pinned by a test that reads it off a stand-in runner rather than by one that spawns it.
 """
 
 import sys
@@ -57,7 +57,7 @@ from itertools import takewhile
 from pathlib import Path
 from typing import Final
 
-from bessemer import config, proc, redact, resolve
+from bessemer import config, container, proc, prompts, redact, resolve
 from bessemer.config import Config
 from bessemer.outcome import Resolved, Unresolved
 
@@ -81,7 +81,37 @@ CONFIG: Final = "config"
 GIT_ENV: Final = "git-env"
 ROOT: Final = "root"
 BASE: Final = "base"
+CREDENTIAL: Final = "credential"
+
+ENV_KEYS: Final = "env-keys"
+"""With `CAP_ADD` and `VOLUMES`: three checks about three keys, not one listing offenders.
+
+The report is read a line at a time, and a reader who set `container_cap_add` in their local
+layer is looking for a line about capabilities.
+
+The three names are shortened from the keys they are about. `container_cap_add` is eight
+characters wider than `bessemer.cli`'s name column, so a line named for the key would push its
+own message right and read as misaligned beside every other check. The key itself is in the
+message, which is where a reader greps for it.
+"""
+
+CAP_ADD: Final = "cap-add"
+VOLUMES: Final = "volumes"
+PROMPTS: Final = "prompts"
+GH: Final = "gh"
 DOCKER: Final = "docker"
+IMAGE: Final = "image"
+
+NO_ADAPTER: Final = f"no adapter loaded, fix the {CONFIG} check above first"
+"""Why the checks that read the adapter's own files skip. One sentence, eight callers.
+
+Hand-written, which is what ADR 0002 asks of a skip message, and written once because it is
+one sentence rather than eight: the port source's argument is that a skip should name the
+check above that has to be fixed first, and every check that skips for this reason has the
+same one above it. The `docker unavailable` skip in `_check_image` stays spelled where it is
+used — it is the list's only second dependency, so a constant for it would be a name with one
+call site.
+"""
 
 TIMEOUT_SECONDS: Final = 15.0
 """Every probe gets this, and no call site may omit it.
@@ -180,6 +210,29 @@ DOCKER_ARGV: Final = ("docker", "info")
 whose daemon is stopped, which is the failure this check exists for — and it is the one the
 port source separates too, `command -v docker` then `docker info`. Here one command covers
 both: the CLI being absent raises `OSError` out of the spawn and never reaches a returncode.
+"""
+
+
+GH_ARGV: Final = ("gh", "auth", "status")
+"""What the `gh` check spawns, and it answers both halves of the question at once.
+
+The pin asks twice — `command -v gh`, then `gh auth status` (run.sh:381–387) — and gets a
+different message from each. One command gets both here for the reason `DOCKER_ARGV` does: an
+absent binary raises `OSError` out of the spawn and never reaches a returncode, so the two
+cases are already distinguishable without a second spawn.
+
+`gh auth status` and not `gh --version`: bessemer's only use of `gh` is opening the pull
+request that ends a run (`bessemer.landing`), and an unauthenticated CLI fails that at the
+last step of a run that has already spent its money.
+"""
+
+IMAGE_INSPECT_ARGV: Final = ("docker", "image", "inspect")
+"""The prefix of what the `image` check spawns; the configured image is appended.
+
+The pin's own preflight question, verbatim (`docker image inspect "$IMAGE"`, run.sh:948).
+Nothing here asks about staleness — the pin's `image_staleness` is F5's and a stale image
+still runs, so a doctor at F3 that reported on it would be reporting from a check bessemer
+has not built.
 """
 
 
@@ -332,13 +385,13 @@ def _crashed(name: str, error: BaseException) -> CheckResult:
     only "the docker check crashed" sends its reader nowhere, and this is a bug report the
     user is being asked to relay.
 
-    **Not the only site, and no longer the only pinned one.** Three other messages carry
-    another program's text — a nonzero `docker info`, a nonzero `uv --version`, and the
-    `OSError` in `_probe` — and all four redact.
-    `tests/test_doctor.py::RedactionTest` asserts it site by site, from a hand-written list
-    of the four: the first review of this issue found the other three correct but unpinned,
-    which is a green suite standing behind three redactions nothing would have noticed
-    losing.
+    **Not the only site, and no longer the only pinned one.** Every other message that carries
+    text bessemer did not write redacts too — the `OSError` in `_probe`, a nonzero
+    `uv --version`, `gh auth status`, `docker info` or `docker image inspect`, and the
+    `OSError` from an unreadable `.env` in `_check_credential`.
+    `tests/test_doctor.py::RedactionTest` asserts it site by site, from a hand-written list:
+    the first review of F1's issue found three of them correct but unpinned, which is a green
+    suite standing behind three redactions nothing would have noticed losing.
     """
     return CheckResult(
         name=name,
@@ -526,7 +579,7 @@ def _check_root(ctx: Context) -> CheckResult:
     Doctor reports it; dispatch will refuse on the identical call.
     """
     if not ctx.ok(CONFIG):
-        return _skipped(ROOT, f"no adapter loaded, fix the {CONFIG} check above first")
+        return _skipped(ROOT, NO_ADAPTER)
     match resolve.resolve_root_agreement(ctx.require_config(), start=ctx.start):
         case Resolved(value=root):
             return _ok(ROOT, f"adapter and git work tree agree on {root}")
@@ -543,7 +596,7 @@ def _check_base(ctx: Context) -> CheckResult:
     repository is worth knowing about only once that repository is the right one.
     """
     if not ctx.ok(CONFIG):
-        return _skipped(BASE, f"no adapter loaded, fix the {CONFIG} check above first")
+        return _skipped(BASE, NO_ADAPTER)
     cfg = ctx.require_config()
     match resolve.resolve_base(cfg, start=ctx.start):
         case Resolved(value=branch):
@@ -553,13 +606,213 @@ def _check_base(ctx: Context) -> CheckResult:
             return _fail(BASE, unresolved.reason, hint=unresolved.hint)
 
 
+def _check_credential(ctx: Context) -> CheckResult:
+    """A Claude credential is configured, and configured where a run can actually reach it.
+
+    **Presence only, never a value or a fragment of one** (ADR 0001). The names are the
+    credential's own, so they are printed; nothing here reads a value except to ask whether it
+    is empty, and `container.Credential` has no field a value could be quoted out of.
+
+    The rule is `bessemer.container.credential_presence`, not a second copy of it — the pin's
+    own discipline for this check (`have_claude_credential`, "not a second copy of the logic",
+    run.sh:344–346), which is also ADR 0002's: dispatch's preflight calls the same function
+    and refuses on what doctor renders here.
+
+    **Two channels, and only one of them crosses into the container.** The gitignored
+    `.bessemer/.env` is where ADR 0001 says secrets live, and `container.forwarding` reads that
+    file and nothing else — so a credential exported in the operator's shell and never written
+    to the file is a machine that passes every other check and produces a run whose agent
+    cannot authenticate. That case is a FAIL naming the file, rather than the pin's `ok`: the
+    pin sourced `.env` into its own environment before asking, which made the two channels one
+    question there and left this exact hole open (`bessemer.container`, residual 2).
+
+    Depends on config because the file it reads is inside the adapter directory. A credential
+    is not actionable without an adapter anyway — there is nothing to dispatch — so the skip
+    costs the reader nothing the config line above it does not already say.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(CREDENTIAL, NO_ADAPTER)
+    adapter_dir = ctx.require_config().adapter_dir
+    secrets_file = adapter_dir / container.SECRETS_FILE
+    try:
+        found = container.credential_presence(adapter_dir=adapter_dir, env=ctx.env)
+    except OSError as error:
+        # The resolver lets this through on purpose — a dispatch must not start a container
+        # on a credential file it could not read. Doctor is the other contract, so the same
+        # failure becomes a line. Redacted like every other message here that carries text
+        # bessemer did not write.
+        return _fail(
+            CREDENTIAL,
+            f"{secrets_file} could not be read{_saying(redact.detail(str(error)))}",
+            hint=f"check that {container.SECRETS_FILE} is a readable file",
+        )
+    if found.crosses:
+        return _ok(
+            CREDENTIAL,
+            f"{', '.join(found.in_secrets_file)} set in {secrets_file} (value not shown)",
+        )
+    if found.exported:
+        return _fail(
+            CREDENTIAL,
+            f"{', '.join(found.exported)} is exported in this shell but not set in "
+            f"{secrets_file}, and only that file's values cross into the container",
+            hint=(
+                f"write the credential into {container.SECRETS_FILE} as well — an exported "
+                f"value is not forwarded, so a run would start without one"
+            ),
+        )
+    return _fail(
+        CREDENTIAL,
+        f"no Claude credential: neither {' nor '.join(container.CREDENTIAL_NAMES)} is set "
+        f"in {secrets_file}",
+        hint=(
+            f"run `claude setup-token` and paste the token into "
+            f"{container.CREDENTIAL_NAMES[0]} in {container.SECRETS_FILE}"
+        ),
+    )
+
+
+def _committed_only(ctx: Context, name: str, key: str) -> CheckResult:
+    """One committed-only key, reported over both channels a user can set it through.
+
+    **The local layer's violation is a loader fact; the environment's is doctor's own.** The
+    two arrive differently on purpose. `config.committed_only_violations` exposes a key set in
+    `config.local.toml`, and doctor renders it while dispatch refuses on the identical value
+    (ADR 0002) — neither reimplements the check. The environment has no such fact to expose:
+    `config._env_layer` is built from `KNOWN_KEYS` minus `COMMITTED_ONLY_KEYS`, so
+    `BESSEMER_CONTAINER_ENV_KEYS` is dropped *by construction* and no layer ever carried it.
+    That is the right thing for the loader to do and it means nobody is told, so the one user
+    who tries it gets silence — which is why this check looks at the environment directly
+    (added from issue 01's review, 2026-08-05).
+
+    Dropped is not the same as reported, and the difference matters to the person who wrote
+    the variable: their intent was to widen the container's boundary from the least reviewable
+    place there is, and they are entitled to know it did nothing.
+
+    **The key, never the value.** The same restraint the git-env check keeps for a path the
+    user exported: the fix is spelled by the name, and a `container_env_keys` value is a list
+    of secret names.
+    """
+    cfg = ctx.require_config()
+    variable = config.ENV_PREFIX + key.upper()
+    channels = []
+    if key in cfg.committed_only_violations():
+        channels.append(f"set in {config.LOCAL_FILE}")
+    if variable in ctx.env:
+        channels.append(f"exported as {variable}, where it is dropped rather than read")
+    if not channels:
+        return _ok(name, f"{key} is set nowhere but {config.COMMITTED_FILE}")
+    return _fail(
+        name,
+        f"{key} is {' and '.join(channels)}; it may only be set in {config.COMMITTED_FILE}",
+        hint=(
+            f"move {key} into {config.COMMITTED_FILE}, where widening the container's "
+            f"boundary is a reviewable diff"
+        ),
+    )
+
+
+def _check_env_keys(ctx: Context) -> CheckResult:
+    """`container_env_keys` is set in the committed layer or nowhere (ADR 0001).
+
+    Both channels — the local layer and the environment — are `_committed_only`'s subject, and
+    the reason the second one is doctor's own observation rather than a loader fact is written
+    there.
+
+    Written out beside its two siblings rather than generated from a table, so that the
+    dependency each declares is visible to `tests/test_doctor.py`'s ordering reader — which
+    walks the function named in `CHECKS` and looks for `ctx.ok` calls in *it*. A factory would
+    move the query one call deeper, where the invariant that keeps this list in dependency
+    order cannot see it.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(ENV_KEYS, NO_ADAPTER)
+    return _committed_only(ctx, ENV_KEYS, "container_env_keys")
+
+
+def _check_cap_add(ctx: Context) -> CheckResult:
+    """`container_cap_add` is set in the committed layer or nowhere (F3 decision 5.2).
+
+    Both channels, and the guard written out, for the reasons `_check_env_keys` gives.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(CAP_ADD, NO_ADAPTER)
+    return _committed_only(ctx, CAP_ADD, "container_cap_add")
+
+
+def _check_volumes(ctx: Context) -> CheckResult:
+    """`container_volumes` is set in the committed layer or nowhere (F3 decision 5.3).
+
+    Both channels, and the guard written out, for the reasons `_check_env_keys` gives.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(VOLUMES, NO_ADAPTER)
+    return _committed_only(ctx, VOLUMES, "container_volumes")
+
+
+def _check_prompts(ctx: Context) -> CheckResult:
+    """How many of the packaged prompt templates this adapter overrides.
+
+    **Informational, and `ok` whatever the count is.** An override is the feature ADR 0001
+    designed — a user edits a prompt without forking bessemer — so a WARN here would train the
+    reader to ignore a line that is reporting a working configuration. What the ADR asks for is
+    that the drift stays *visible*, which is a line in the report rather than a status column.
+
+    The names come from `prompts.overridden`, which exists so doctor never restates
+    `<adapter>/prompts/<name>`: a glob would count a `README.md` left beside an override, and
+    report drift that `prompts.load` would never read.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(PROMPTS, NO_ADAPTER)
+    overridden = prompts.overridden(ctx.require_config().adapter_dir)
+    total = len(prompts.TEMPLATE_NAMES)
+    if not overridden:
+        return _ok(PROMPTS, f"no override; all {total} templates come from the pin")
+    return _ok(
+        PROMPTS,
+        f"{len(overridden)} of {total} templates overridden: {', '.join(overridden)}",
+    )
+
+
+def _check_gh(ctx: Context) -> CheckResult:
+    """The GitHub CLI is present and authenticated.
+
+    Bessemer opens the pull request that ends a run with `gh` (`bessemer.landing`), and it does
+    so *last* — after the container, the passes and the push. An unauthenticated CLI therefore
+    fails at the one point where a run has already spent everything it was going to spend,
+    which is why this is a FAIL here rather than something the landing step discovers.
+
+    Independent of config and of docker: `gh` is a fact about the machine.
+    """
+    probe = _probe(
+        ctx,
+        GH,
+        GH_ARGV,
+        missing_hint=(
+            "install the GitHub CLI (https://cli.github.com) — bessemer opens the run's pull "
+            "request with it"
+        ),
+    )
+    if isinstance(probe, CheckResult):
+        return probe
+    if not probe.ok:
+        return _fail(
+            GH,
+            f"`{' '.join(GH_ARGV)}` exited {probe.returncode}"
+            f"{_saying(redact.detail(probe.stderr))}",
+            hint="run `gh auth login`",
+        )
+    return _ok(GH, "CLI present, authenticated")
+
+
 def _check_docker(ctx: Context) -> CheckResult:
     """The docker CLI is present and its daemon is responding.
 
-    Last, because it is the one check whose failure says nothing about the repository: a
+    Late, because it is the one check whose failure says nothing about the repository: a
     stopped daemon is a two-second fix and everything above it stays true meanwhile. The
     port source ordered it first for the opposite reason — its later checks were all about
-    images — and F1 has no image check yet to depend on it.
+    images — and the image check below is the first one bessemer has that depends on it, which
+    is why docker is no longer last.
     """
     probe = _probe(
         ctx,
@@ -576,6 +829,66 @@ def _check_docker(ctx: Context) -> CheckResult:
             hint="start Docker Desktop (or `dockerd`), then run bessemer doctor again",
         )
     return _ok(DOCKER, "CLI present, daemon responding")
+
+
+def _check_image(ctx: Context) -> CheckResult:
+    """The configured adapter image exists on this machine.
+
+    Two failures, one line each, and they are different failures: no `image` key at all is an
+    adapter that has not said which image to run, and a configured image docker cannot find is
+    one nobody has built here yet. `bessemer.config` deliberately gives `image` no default, so
+    the first case is a named refusal rather than `docker run` failing later on a tag the
+    adopter never chose.
+
+    **No staleness line.** The pin's `image_staleness` compares the image's creation timestamp
+    against dependency inputs it knows by name (`api/requirements*.txt`, `client/yarn.lock`) —
+    adopter facts a stack-agnostic core cannot have. It is F5's, and a stale image still runs.
+
+    Depends on docker as well as on config, and skips with the port source's own line when the
+    daemon is down: `docker image inspect` against a stopped daemon reports the image missing,
+    which would be a FAIL saying "build it" to someone whose image is already built.
+    """
+    if not ctx.ok(CONFIG):
+        return _skipped(IMAGE, NO_ADAPTER)
+    if not ctx.ok(DOCKER):
+        return _skipped(IMAGE, f"docker unavailable, fix the {DOCKER} check above first")
+    cfg = ctx.require_config()
+    image = cfg.get("image")
+    if image is None:
+        return _fail(
+            IMAGE,
+            "no image configured, so a run has nothing to start a container from",
+            hint=(
+                f'set image = "<tag>" in {config.COMMITTED_FILE} and build that tag from '
+                f"{config.ADAPTER_DIR}/Dockerfile"
+            ),
+        )
+    if not isinstance(image, str) or not image:
+        # A TOML number or list reaching the argv would crash `_probe` while building its
+        # message, which would report bessemer's bug for the adopter's typo.
+        return _fail(
+            IMAGE,
+            f"image is not an image name: {image!r} (from the {cfg.layer_of('image')} layer)",
+            hint='set image to a tag, such as image = "bessemer-adapter"',
+        )
+    probe = _probe(
+        ctx,
+        IMAGE,
+        (*IMAGE_INSPECT_ARGV, image),
+        # Unreachable while the docker check above passes, and written anyway: this check does
+        # not get to assume the machine held still between two spawns.
+        missing_hint="install Docker Desktop or docker-ce, and check that `docker` is on PATH",
+    )
+    if isinstance(probe, CheckResult):
+        return probe
+    if not probe.ok:
+        return _fail(
+            IMAGE,
+            f"image {image} is not present on this machine"
+            f"{_saying(redact.detail(probe.stderr))}",
+            hint=f"build it from {config.ADAPTER_DIR}/Dockerfile and tag it {image}",
+        )
+    return _ok(IMAGE, f"{image} present (from the {cfg.layer_of('image')} layer)")
 
 
 @dataclass(frozen=True)
@@ -598,14 +911,30 @@ CHECKS: Final = (
     Check(GIT_ENV, _check_git_env),
     Check(ROOT, _check_root),
     Check(BASE, _check_base),
+    Check(CREDENTIAL, _check_credential),
+    Check(ENV_KEYS, _check_env_keys),
+    Check(CAP_ADD, _check_cap_add),
+    Check(VOLUMES, _check_volumes),
+    Check(PROMPTS, _check_prompts),
+    Check(GH, _check_gh),
     Check(DOCKER, _check_docker),
+    Check(IMAGE, _check_image),
 )
 """Every check, in dependency order. `tests/test_doctor.py` restates the names by hand.
 
-Six, and covering only what has been built. The hand-written literal in the test is what
-notices a check disappearing: an assertion that iterates this tuple cannot, and a doctor that
-prints five lines and exits 0 with the whole suite green is the one failure a tool whose job
-is reporting must not have.
+Covering only what has been built, which is what grew this list at F3: the credential, the
+three committed-only keys, the prompt overrides, `gh` and the image all became checkable
+because the subsystems they are about now exist. No count is stated here, in the issue, or in
+the README — a numeral restating a list is a second value that can disagree with it.
+
+The order is what the reader is asked to fix things in, and the dependencies fall out of it:
+everything the adapter's own files answer runs before the three checks that ask another
+program. `docker` sits second-to-last rather than last for the first time, because `image` is
+the first check bessemer has that cannot be answered without it.
+
+The hand-written literal in the test is what notices a check disappearing: an assertion that
+iterates this tuple cannot, and a doctor that prints one line fewer and exits 0 with the whole
+suite green is the one failure a tool whose job is reporting must not have.
 """
 
 

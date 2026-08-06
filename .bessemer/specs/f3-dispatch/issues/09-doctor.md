@@ -1,6 +1,6 @@
 # 09 — doctor: the checks F3 has earned
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 01, 03
 

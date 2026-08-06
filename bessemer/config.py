@@ -586,10 +586,17 @@ def _env_layer(env: Mapping[str, str]) -> Mapping[str, object]:
     as something doctor reports after the fact. Enforced by construction rather than by a
     check, so that whoever adds the next committed-only key inherits it without reading this.
 
-    The consequence, named rather than hidden: such a variable is ignored silently, exactly
-    as `BESSEMER_ROOT` is. Reporting it would mean a second violation channel for a value no
-    layer ever carried, and the local layer — where a user actually writes these — is the
-    one doctor FAILs on.
+    The consequence, named rather than hidden: such a variable is dropped here silently,
+    exactly as `BESSEMER_ROOT` is — this module has no violation fact to expose for a value no
+    layer ever carried, and inventing one would be a second channel through the loader for
+    something the loader deliberately cannot see.
+
+    **Silent here does not mean silent to the user** (issue 09, 2026-08-06). Dropped and
+    reported are different things to the person who wrote the variable: their intent was to
+    widen the container's boundary from the least reviewable place there is, and they are
+    entitled to know it did nothing. Doctor's three committed-only checks therefore read the
+    environment directly for these names and FAIL on one that is set. That is doctor's own
+    observation rather than a fact from here, and `bessemer.doctor._committed_only` says so.
 
     A variable that is set but empty counts as set. The alternative — treating `""` as
     absent — invents a rule the shell does not have, and would silently ignore a value the

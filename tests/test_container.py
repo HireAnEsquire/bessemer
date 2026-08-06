@@ -19,6 +19,7 @@ why it records cwd and timeout rather than only argv).
 """
 
 import ast
+import dataclasses
 import inspect
 import unittest
 from collections.abc import Mapping, Sequence
@@ -763,6 +764,81 @@ class EnvBoundaryTest(ContainerTest):
             self.assertNotIn("=", name)
 
 
+class CredentialPresenceTest(ContainerTest):
+    """The shared resolver: where a Claude credential is configured, if anywhere.
+
+    One definition, two callers — doctor renders it (F3 issue 09) and dispatch's preflight
+    refuses on it (issue 10) — which is the pin's own discipline for this check
+    (`have_claude_credential`, "not a second copy of the logic", run.sh:344–346).
+    """
+
+    TOKEN: Final = "sk-ant-oat01-thisisnotarealtokenbutitlookslikeone"
+
+    def presence(self, **env: str) -> container.Credential:
+        return container.credential_presence(adapter_dir=self.adapter, env=env)
+
+    def test_a_name_in_the_secrets_file_is_the_channel_that_crosses(self) -> None:
+        """`forwarding` above reads this file and nothing else, so this is the only channel
+        that reaches the agent."""
+        self.write_secrets(f"CLAUDE_CODE_OAUTH_TOKEN={self.TOKEN}\n")
+        found = self.presence()
+        self.assertEqual(found.in_secrets_file, ("CLAUDE_CODE_OAUTH_TOKEN",))
+        self.assertTrue(found.crosses)
+        self.assertTrue(found.present)
+
+    def test_either_built_in_name_counts(self) -> None:
+        self.write_secrets(f"ANTHROPIC_API_KEY={self.TOKEN}\n")
+        self.assertEqual(self.presence().in_secrets_file, ("ANTHROPIC_API_KEY",))
+
+    def test_both_names_are_reported_in_the_modules_own_order(self) -> None:
+        """`CREDENTIAL_NAMES` order rather than file order: this is a set of names being
+        reported, and the reader should not see it reshuffle when a file is edited."""
+        self.write_secrets(f"ANTHROPIC_API_KEY={self.TOKEN}\nCLAUDE_CODE_OAUTH_TOKEN=x\n")
+        self.assertEqual(self.presence().in_secrets_file, container.CREDENTIAL_NAMES)
+
+    def test_an_exported_name_is_present_but_does_not_cross(self) -> None:
+        """The hole the pin left open: it sourced `.env` into its own environment before
+        asking, so a credential that only ever existed in the operator's shell passed its
+        preflight and started a container without one."""
+        found = self.presence(CLAUDE_CODE_OAUTH_TOKEN=self.TOKEN)
+        self.assertEqual(found.exported, ("CLAUDE_CODE_OAUTH_TOKEN",))
+        self.assertFalse(found.crosses)
+        self.assertTrue(found.present)
+
+    def test_an_empty_value_is_not_a_credential_in_either_channel(self) -> None:
+        """`[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]` at the pin."""
+        self.write_secrets("CLAUDE_CODE_OAUTH_TOKEN=\n")
+        found = self.presence(ANTHROPIC_API_KEY="")
+        self.assertEqual((found.in_secrets_file, found.exported), ((), ()))
+        self.assertFalse(found.present)
+
+    def test_nothing_anywhere_is_present_false(self) -> None:
+        self.assertFalse(self.presence(PATH="/usr/bin").present)
+
+    def test_an_absent_secrets_file_is_an_empty_channel_rather_than_an_error(self) -> None:
+        """bessemer's own adapter has no `.env`, and doctor must still report on it."""
+        self.assertEqual(self.presence().in_secrets_file, ())
+
+    def test_a_secrets_file_that_cannot_be_read_propagates(self) -> None:
+        """The same choice `forwarding` makes, and for the same reason: a dispatch must not
+        start a container on a credential file it could not read. Doctor catches this and
+        renders a line, because doctor's contract is the other one."""
+        (self.adapter / container.SECRETS_FILE).mkdir()
+        with self.assertRaises(OSError):
+            self.presence()
+
+    def test_the_type_carries_no_value_to_leak(self) -> None:
+        """ADR 0001's "presence only" as a type rather than as a rule: there is no field here
+        a caller could quote a secret out of."""
+        self.write_secrets(f"CLAUDE_CODE_OAUTH_TOKEN={self.TOKEN}\n")
+        found = self.presence(ANTHROPIC_API_KEY=self.TOKEN)
+        self.assertNotIn(self.TOKEN, repr(found))
+        self.assertEqual(
+            [field.name for field in dataclasses.fields(found)],
+            ["in_secrets_file", "exported"],
+        )
+
+
 class BoundaryTest(ContainerTest):
     """The last gate before an argv exists: what a `Boundary` refuses to be built from."""
 
@@ -1181,6 +1257,7 @@ class ModuleShapeTest(unittest.TestCase):
 
     INTERFACE: Final = (
         "forwarding",
+        "credential_presence",
         "run_argv",
         "chown_argv",
         "setup_hook_argv",
@@ -1192,11 +1269,12 @@ class ModuleShapeTest(unittest.TestCase):
     """ADR 0003's row is "start / `run_setup_hook` / pure argv builders / remove"; the builders
     are named here, and the ADR's table carries the same names as of 2026-08-05.
 
-    An eleventh public function is a decision to take to the ADR, not a diff to wave through —
-    the treatment `tests/test_checkout.py` gives its four.
+    `credential_presence` joined them at F3 issue 09, which is where doctor gained the check
+    that needs it — one more public function is a decision to take to the ADR, not a diff to
+    wave through, the treatment `tests/test_checkout.py` gives its four.
     """
 
-    TYPES: Final = ("Boundary", "Forwarding", "SetupHookError")
+    TYPES: Final = ("Boundary", "Forwarding", "Credential", "SetupHookError")
     """Every public *type*, listed separately and just as strictly: a new return type is "the
     interface grew" as much as a new function is, and a filter that counted only functions
     would wave it through."""

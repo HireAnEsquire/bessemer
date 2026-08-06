@@ -78,10 +78,12 @@ Two residuals, recorded rather than discovered later:
    written down as the change to make if a run log ever leaves the host.
 2. *Values are read from the file, never from the operator's shell.* The pin's container saw
    exactly `--env-file "$BOX/.env"`, so an exported-but-unwritten `ANTHROPIC_API_KEY` never
-   crossed there either. Doctor's credential check reads the *environment* (issue 09), so a
-   machine that exports the credential without writing it into `.bessemer/.env` passes
-   preflight and starts a container without it. Inherited, named, and issue 10's to
-   reconcile if it decides to.
+   crossed there either — while the pin's own credential check read the environment, so that
+   machine passed preflight and started a container without a credential. **Closed at issue
+   09 rather than inherited:** `credential_presence` below answers about both channels
+   separately, and doctor FAILs on the exported-only one, naming the file as the fix. The
+   union of the two is still available as `Credential.present`, which is what the pin was
+   actually testing, so issue 10's preflight can refuse on either reading deliberately.
 
 `.env` is parsed by **docker's `--env-file` grammar, not the shell's**, because docker's is
 what the pin's container actually received: `#` comment lines, blank lines, `NAME=` and
@@ -116,7 +118,7 @@ Three alternatives were rejected, and each for its own reason:
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
@@ -164,9 +166,9 @@ CREDENTIAL_NAMES: Final = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 
 An owned literal, and the only names that cross `SECRETS_FILE` without appearing in
 `container_env_keys` — which is what lets an adopter who needs nothing extra never encounter
-that key at all (ADR 0001). Doctor's credential check imports this rather than restating it
-(issue 09), so the presence check and the forwarding cannot come to disagree about which
-names are the credential.
+that key at all (ADR 0001). `credential_presence` reads these names and doctor calls that
+rather than restating them (issue 09), so the presence check and the forwarding cannot come
+to disagree about which names are the credential.
 
 Both, not one: `CLAUDE_CODE_OAUTH_TOKEN` is a subscription login and `ANTHROPIC_API_KEY` is
 an API key, and the pin's own `have_claude_credential` accepts either (run.sh:254).
@@ -658,6 +660,69 @@ def forwarding(*, adapter_dir: Path, declared: Sequence[str]) -> Forwarding:
         forwarded=tuple((name, value) for name, value in entries if name in permitted),
         withheld=tuple(name for name, _ in entries if name not in permitted),
         env_file=committed if committed.is_file() else None,
+    )
+
+
+@dataclass(frozen=True)
+class Credential:
+    """Which of `CREDENTIAL_NAMES` are set, and through which channel. **Names, never values.**
+
+    ADR 0001's "credential checks report presence only" as a type: there is no field here a
+    caller could quote a secret out of, which is the same restraint `Forwarding.withheld`
+    keeps for the names it reports.
+
+    The two channels are kept apart because they do not mean the same thing. Only
+    `in_secrets_file` crosses into the container — `forwarding` above reads that file and
+    nothing else — so a credential that exists only in the operator's shell is a machine that
+    cannot dispatch, and a check that merged the two would report it as healthy.
+    """
+
+    in_secrets_file: tuple[str, ...]
+    """Names set in the adapter's gitignored `SECRETS_FILE`, in `CREDENTIAL_NAMES` order."""
+
+    exported: tuple[str, ...]
+    """Names set in the environment the caller handed in, in `CREDENTIAL_NAMES` order."""
+
+    @property
+    def crosses(self) -> bool:
+        """Whether a credential would reach the agent inside the container."""
+        return bool(self.in_secrets_file)
+
+    @property
+    def present(self) -> bool:
+        """Whether either channel has one. The pin's `have_claude_credential`, exactly.
+
+        The pin sources `SECRETS_FILE` into its own environment before asking (run.sh:246–248,
+        :254), so "in the file" and "exported" are one question there. They are two here, and
+        this property is the union the pin was actually testing.
+        """
+        return bool(self.in_secrets_file or self.exported)
+
+
+def credential_presence(*, adapter_dir: Path, env: Mapping[str, str]) -> Credential:
+    """Where a Claude credential is configured, if anywhere. One definition, two callers.
+
+    Doctor renders this as a check line (F3 issue 09) and dispatch's preflight refuses on it
+    (issue 10) — the same split `config.committed_only_violations` and `prompts.overridden`
+    make, and the pin's own discipline for this exact check: `have_claude_credential` is shared
+    by its doctor and its preflight so the two "can't drift apart" (run.sh:344–346). It lives
+    here rather than in doctor because this module owns `CREDENTIAL_NAMES` and `SECRETS_FILE`,
+    and the presence check and the forwarding must not come to disagree about either.
+
+    **Either name counts, and an empty value does not.** `[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}
+    ${ANTHROPIC_API_KEY:-}" ]` is the pin's test: a name exported as the empty string is a name
+    with no credential in it, and treating it as set would be a green check on a machine that
+    cannot authenticate.
+
+    A `SECRETS_FILE` that is there and cannot be read propagates, exactly as `_read_env_file`
+    says: the value of this function to a dispatch is that it fails loudly rather than starting
+    a container without the credential. Doctor catches it and renders a line, because doctor's
+    contract is the other one.
+    """
+    entries = dict(_read_env_file(adapter_dir / SECRETS_FILE))
+    return Credential(
+        in_secrets_file=tuple(name for name in CREDENTIAL_NAMES if entries.get(name)),
+        exported=tuple(name for name in CREDENTIAL_NAMES if env.get(name)),
     )
 
 

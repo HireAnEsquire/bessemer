@@ -28,14 +28,23 @@ from pathlib import Path
 from typing import Final
 from unittest import mock
 
-from bessemer import cli, config, doctor, proc, resolve
+from bessemer import cli, config, container, doctor, proc, prompts, resolve
 from bessemer.doctor import Check, CheckResult, Context
+from bessemer.outcome import Resolved
 from tests.gitenv import fixture_env
 
 TIMEOUT: Final = 60
 """For fixture git commands. Generous: it is a backstop, not the thing under test."""
 
 TOKEN: Final = "ghp_thisisnotarealtokenbutitlookslikeone"
+CLAUDE_TOKEN: Final = "sk-ant-oat01-thisisnotarealtokenbutitlookslikeone"
+"""A Claude credential's own shape, kept apart from the GitHub PAT above.
+
+`TOKEN` is what git echoes in a remote URL, which is what `RedactionTest` is about; this one
+is what `claude setup-token` prints, which is what the credential check is about. One literal
+serving both would make the presence-only assertions read against a value the check has never
+seen in the wild.
+"""
 CREDENTIAL_URL: Final = f"https://x-access-token:{TOKEN}@github.com/HireAnEsquire/bessemer.git"
 CREDENTIAL_STDERR: Final = (
     f"fatal: unable to access '{CREDENTIAL_URL}/': Could not resolve host: github.com"
@@ -52,6 +61,26 @@ Answer = tuple[int, str, str]
 
 UV_PRESENT: Final[Answer] = (0, "uv 0.9.2 (0aa1e5d 2026-07-11)\n", "")
 DOCKER_UP: Final[Answer] = (0, "Server Version: 28.0.1\n", "")
+GH_AUTHENTICATED: Final[Answer] = (0, "github.com\n  Logged in to github.com account dev\n", "")
+IMAGE_PRESENT: Final[Answer] = (0, '[{"Id": "sha256:0123"}]\n', "")
+
+GH_LOGGED_OUT: Final[Answer] = (
+    1,
+    "",
+    "You are not logged into any GitHub hosts. To log in, run: gh auth login\n",
+)
+"""What `gh auth status` really prints with no host configured."""
+
+IMAGE_MISSING: Final[Answer] = (1, "", "Error: No such image: bessemer-adapter\n")
+"""What `docker image inspect` really prints for a tag nobody has built."""
+
+IMAGE_INSPECT: Final = ["docker", "image", "inspect"]
+"""The prefix `Spawns` keys the image answer on, hand-written rather than imported.
+
+Two docker commands reach the stand-in — `info` and `image inspect` — so keying on the
+program alone would make "the daemon is up but the image is missing" unexpressible, which is
+the one combination the image check exists for.
+"""
 
 DAEMON_DOWN: Final[Answer] = (
     1,
@@ -66,8 +95,10 @@ class Spawns:
     """A stand-in for `bessemer.proc.run` that answers from a table and spawns nothing.
 
     Keyed on the program rather than on call order, so a test that reorders the check list
-    does not silently start asserting about a different command. An unlisted program gets the
-    healthy answer, which keeps each test to the one failure it is about.
+    does not silently start asserting about a different command — with `docker image inspect`
+    keyed as `image`, because it and `docker info` are two questions with two answers. An
+    unlisted program gets the healthy answer, which keeps each test to the one failure it is
+    about.
 
     Records every call, which is what `ArgvTest` reads: the check builds its own argv and
     hands it here, so the recorder holds the real thing without anything having been run.
@@ -90,8 +121,14 @@ class Spawns:
     ) -> proc.Result:
         command = list(argv)
         self.calls.append((command, timeout))
-        defaults: Mapping[str, Answer] = {"uv": UV_PRESENT, "docker": DOCKER_UP}
-        answer = self.answers.get(command[0], defaults[command[0]])
+        defaults: Mapping[str, Answer] = {
+            "uv": UV_PRESENT,
+            "gh": GH_AUTHENTICATED,
+            "docker": DOCKER_UP,
+            "image": IMAGE_PRESENT,
+        }
+        key = "image" if command[: len(IMAGE_INSPECT)] == IMAGE_INSPECT else command[0]
+        answer = self.answers.get(key, defaults[key])
         if isinstance(answer, BaseException):
             raise answer
         returncode, stdout, stderr = answer
@@ -252,6 +289,31 @@ class TempDirTest(unittest.TestCase):
         (adapter / config.COMMITTED_FILE).write_text(body, encoding="utf-8")
         return adapter
 
+    def make_local(self, adapter: Path, body: str) -> Path:
+        """A gitignored `config.local.toml` beside the committed one."""
+        local = adapter / config.LOCAL_FILE
+        local.write_text(body, encoding="utf-8")
+        return local
+
+    def make_secrets(self, adapter: Path, body: str) -> Path:
+        """The gitignored `.env` the credential crosses through, written verbatim.
+
+        Real file content in docker's `--env-file` grammar rather than a patched reader: the
+        credential check's whole subject is which channel a token is configured in, and a
+        stubbed file read would make the test an assertion about the stub.
+        """
+        secrets = adapter / container.SECRETS_FILE
+        secrets.write_text(body, encoding="utf-8")
+        return secrets
+
+    def make_override(self, adapter: Path, name: str) -> Path:
+        """One prompt override, at the path `bessemer.prompts` actually reads."""
+        directory = adapter / prompts.OVERRIDE_DIR
+        directory.mkdir(parents=True, exist_ok=True)
+        override = directory / name
+        override.write_text("overridden\n", encoding="utf-8")
+        return override
+
     def context(
         self,
         *,
@@ -294,10 +356,26 @@ class CheckListTest(TempDirTest):
     whose job is reporting must not have.
     """
 
-    def test_the_checks_are_these_six_in_this_order(self) -> None:
+    def test_the_checks_are_these_in_this_order(self) -> None:
+        """The list issue 09 names, restated as the literal it asks for — and no count, here
+        or in its name: a numeral beside a list is a second value that can disagree with it."""
         self.assertEqual(
             [check.name for check in doctor.CHECKS],
-            ["uv", "config", "git-env", "root", "base", "docker"],
+            [
+                "uv",
+                "config",
+                "git-env",
+                "root",
+                "base",
+                "credential",
+                "env-keys",
+                "cap-add",
+                "volumes",
+                "prompts",
+                "gh",
+                "docker",
+                "image",
+            ],
         )
 
     def test_every_check_reports_under_the_name_declared_beside_it(self) -> None:
@@ -315,13 +393,41 @@ class OrderingTest(unittest.TestCase):
 
     def test_the_reader_actually_finds_the_queries(self) -> None:
         """A scanner that found nothing would make the assertion above pass while checking
-        nothing at all. Two checks depend on config today; both must be visible here."""
+        nothing at all. Every dependency in the list today is restated here by hand, including
+        the image check's second one — a check that depends on two others is the case a reader
+        looking for one query would half-see."""
         source = functions()
         queried = {
             check.name: queried_names(source[check.probe.__name__]) for check in doctor.CHECKS
         }
-        self.assertEqual(queried["root"], ["config"])
-        self.assertEqual(queried["base"], ["config"])
+        self.assertEqual(
+            queried,
+            {
+                "uv": [],
+                "config": [],
+                "git-env": [],
+                "root": ["config"],
+                "base": ["config"],
+                "credential": ["config"],
+                "env-keys": ["config"],
+                "cap-add": ["config"],
+                "volumes": ["config"],
+                "prompts": ["config"],
+                "gh": [],
+                "docker": [],
+                "image": ["config", "docker"],
+            },
+        )
+
+    def test_a_delegating_check_still_declares_its_dependency_where_it_can_be_seen(
+        self,
+    ) -> None:
+        """The three committed-only checks share one body, and the reader above walks only
+        the function named in `CHECKS`. So each asks `ctx.ok` itself: move the query into the
+        helper and the ordering invariant stops covering three of the list's checks while
+        every assertion in this class stays green."""
+        source = functions()
+        self.assertEqual(queried_names(source["_committed_only"]), [])
 
     def test_moving_a_check_before_the_one_it_queries_is_a_violation(self) -> None:
         """The negative direction. Without it the invariant is a function that could return
@@ -459,13 +565,33 @@ class RedactionTest(TempDirTest):
     def test_an_unspawnable_uv_does_not_print_a_credential(self) -> None:
         self.assertRedacted(self.line_for("uv", uv=OSError(2, CREDENTIAL_STDERR)))
 
-    def test_there_are_exactly_four_places_doctor_redacts(self) -> None:
-        """The guard on the list above. Four, hand-written: a fifth call into
-        `bessemer.redact` means a fifth message carrying another program's text, and it must
-        arrive with an assertion of its own rather than inheriting these four's green."""
+    def test_a_nonzero_gh_auth_status_does_not_print_a_credential(self) -> None:
+        self.assertRedacted(self.line_for("gh", gh=(1, "", CREDENTIAL_STDERR)))
+
+    def test_a_failing_image_inspect_does_not_print_a_credential(self) -> None:
+        repo = self.make_repo(self.tmp / "repo")
+        self.make_adapter(repo, body='image = "bessemer-adapter"\n')
+        report = doctor.run_checks(
+            self.context(start=repo, run=Spawns(image=(1, "", CREDENTIAL_STDERR)))
+        )
+        self.assertRedacted(rendered([by_name(report)["image"]]))
+
+    def test_an_unreadable_secrets_file_does_not_print_a_credential(self) -> None:
+        """The credential check's own `OSError` branch — the one site here whose message is
+        about a file that holds a token rather than about another program's output."""
+        repo = self.make_repo(self.tmp / "repo")
+        self.make_adapter(repo)
+        with mock.patch.object(Path, "read_text", side_effect=OSError(CREDENTIAL_STDERR)):
+            report = doctor.run_checks(self.context(start=repo))
+        self.assertRedacted(rendered([by_name(report)["credential"]]))
+
+    def test_every_place_doctor_redacts_has_a_test_here(self) -> None:
+        """The guard on the list above, hand-written: one more call into `bessemer.redact`
+        means one more message carrying text bessemer did not write, and it must arrive with
+        an assertion of its own rather than inheriting these ones' green."""
         self.assertEqual(
             len(calls_on(doctor_module(), "redact")),
-            4,
+            7,
             "doctor gained or lost a redacting site; add or remove a test in RedactionTest",
         )
 
@@ -504,12 +630,24 @@ class ArgvTest(TempDirTest):
     that constant changing.
     """
 
-    def test_the_checks_spawn_exactly_these_two_commands(self) -> None:
+    def test_the_checks_spawn_exactly_these_commands(self) -> None:
+        """With no adapter, which is what the image check needs one of — so this is also the
+        assertion that a skipped check spawns nothing."""
         spawns = Spawns()
         doctor.run_checks(self.context(run=spawns))
         self.assertEqual(
             [command for command, _ in spawns.calls],
-            [["uv", "--version"], ["docker", "info"]],
+            [["uv", "--version"], ["gh", "auth", "status"], ["docker", "info"]],
+        )
+
+    def test_the_image_check_appends_the_configured_image_to_the_inspect(self) -> None:
+        repo = self.make_repo(self.tmp / "repo")
+        self.make_adapter(repo, body='image = "bessemer-adapter"\n')
+        spawns = Spawns()
+        doctor.run_checks(self.context(start=repo, run=spawns))
+        self.assertIn(
+            ["docker", "image", "inspect", "bessemer-adapter"],
+            [command for command, _ in spawns.calls],
         )
 
     def test_every_spawn_carries_a_timeout(self) -> None:
@@ -712,6 +850,353 @@ class GitEnvCheckTest(TempDirTest):
         self.assertIn("GIT_NOPE", line.message)
 
 
+class AdapterCheckTest(TempDirTest):
+    """Base for the checks that read the adapter's own files. One healthy repo, one adapter."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = self.make_repo(self.tmp / "repo")
+        self.adapter = self.make_adapter(self.repo)
+
+    def report(
+        self, *, env: Mapping[str, str] | None = None, run: doctor.Runner | None = None
+    ) -> dict[str, CheckResult]:
+        return by_name(doctor.run_checks(self.context(start=self.repo, env=env, run=run)))
+
+
+class CredentialCheckTest(AdapterCheckTest):
+    """Presence only, through the one channel that reaches the container.
+
+    The token here is `tests.test_doctor.CLAUDE_TOKEN`, a real-shaped value in a real
+    `.env` — the assertion that no value is printed is worth nothing against a fixture whose
+    value was never there to leak.
+    """
+
+    def test_a_credential_in_the_secrets_file_is_ok_and_names_the_variable(self) -> None:
+        self.make_secrets(self.adapter, f"CLAUDE_CODE_OAUTH_TOKEN={CLAUDE_TOKEN}\n")
+        line = self.report()["credential"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", line.message)
+
+    def test_either_built_in_name_counts(self) -> None:
+        """The pin's own `have_claude_credential`: a subscription login or an API key."""
+        self.make_secrets(self.adapter, f"ANTHROPIC_API_KEY={CLAUDE_TOKEN}\n")
+        self.assertEqual(self.report()["credential"].status, "ok")
+
+    def test_no_credential_anywhere_is_a_fail_that_says_how_to_get_one(self) -> None:
+        self.make_secrets(self.adapter, "# nothing here yet\n")
+        line = self.report()["credential"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("no Claude credential", line.message)
+        self.assertIn("claude setup-token", line.hint)
+
+    def test_an_absent_secrets_file_reads_as_no_credential_rather_than_a_crash(self) -> None:
+        line = self.report()["credential"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("no Claude credential", line.message)
+
+    def test_an_empty_value_is_not_a_credential(self) -> None:
+        """`[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}..." ]` at the pin: a name exported as the
+        empty string is a name with no credential in it, and a green line for it is a green
+        line on a machine that cannot authenticate."""
+        self.make_secrets(self.adapter, "CLAUDE_CODE_OAUTH_TOKEN=\n")
+        self.assertEqual(self.report()["credential"].status, "FAIL")
+
+    def test_exported_but_not_written_is_a_fail_naming_the_file(self) -> None:
+        """**The hole the pin left open.** `container.forwarding` reads the gitignored `.env`
+        and nothing else, so an exported credential never crosses into the container: a run
+        would start and its agent could not authenticate. The pin sourced `.env` into its own
+        environment before asking, which made this case indistinguishable there."""
+        line = self.report(env={"CLAUDE_CODE_OAUTH_TOKEN": CLAUDE_TOKEN})["credential"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("exported in this shell", line.message)
+        self.assertIn(container.SECRETS_FILE, line.message)
+
+    def test_the_file_wins_over_the_shell(self) -> None:
+        """Both channels set is the ordinary developer's machine, and it is healthy."""
+        self.make_secrets(self.adapter, f"ANTHROPIC_API_KEY={CLAUDE_TOKEN}\n")
+        line = self.report(env={"CLAUDE_CODE_OAUTH_TOKEN": CLAUDE_TOKEN})["credential"]
+        self.assertEqual(line.status, "ok")
+
+    def test_no_value_reaches_any_rendered_line(self) -> None:
+        """ADR 0001: presence only, never values, never fragments — asserted over the whole
+        rendered report rather than over one message, because the report is what is printed."""
+        self.make_secrets(self.adapter, f"CLAUDE_CODE_OAUTH_TOKEN={CLAUDE_TOKEN}\n")
+        report = doctor.run_checks(
+            self.context(start=self.repo, env={"ANTHROPIC_API_KEY": CLAUDE_TOKEN})
+        )
+        output = rendered(report)
+        self.assertNotIn(CLAUDE_TOKEN, output)
+        self.assertNotIn(CLAUDE_TOKEN[:16], output)
+
+    def test_an_unreadable_secrets_file_is_a_line_rather_than_a_crash(self) -> None:
+        """The resolver lets the `OSError` through on purpose — a dispatch must not start a
+        container on a credential file it could not read. Doctor is the other contract."""
+        (self.adapter / container.SECRETS_FILE).mkdir()
+        line = self.report()["credential"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("could not be read", line.message)
+        self.assertNotIn("crashed", line.message)
+
+    def test_the_names_come_from_the_container_modules_own_literal(self) -> None:
+        """One definition of "which names are the credential", shared with the forwarding
+        that actually carries them — the pin's `have_claude_credential` discipline."""
+        with mock.patch.object(container, "CREDENTIAL_NAMES", ("SOME_OTHER_NAME",)):
+            self.make_secrets(self.adapter, f"SOME_OTHER_NAME={CLAUDE_TOKEN}\n")
+            line = self.report()["credential"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("SOME_OTHER_NAME", line.message)
+
+
+class CredentialResolverTest(unittest.TestCase):
+    """One definition, called identically by doctor and by dispatch's preflight (issue 10).
+
+    Asserted as source rather than as behaviour: the second copy this forbids would be a
+    second `env` read of the two names, and a behavioural test cannot see one because a copy
+    would agree with the original until the day it did not.
+    """
+
+    def credential_readers(self) -> dict[str, list[str]]:
+        """Every module under `bessemer/` that names a credential variable, and where."""
+        origin = doctor.__file__
+        assert origin is not None, "bessemer.doctor must be importable from a source tree"
+        package = Path(origin).parent
+        found: dict[str, list[str]] = {}
+        for module in sorted(package.glob("*.py")):
+            lines = [
+                f"{module.name}:{number}"
+                for number, line in enumerate(
+                    module.read_text(encoding="utf-8").splitlines(), start=1
+                )
+                if "CLAUDE_CODE_OAUTH_TOKEN" in line or "ANTHROPIC_API_KEY" in line
+            ]
+            if lines:
+                found[module.name] = lines
+        return found
+
+    def test_only_the_container_module_names_the_credential_variables(self) -> None:
+        self.assertEqual(list(self.credential_readers()), ["container.py"])
+
+    def test_the_reader_finds_the_one_module_that_may_name_them(self) -> None:
+        """The negative direction. A scanner that matched nothing would pass the assertion
+        above against a package that had grown a second copy in every module."""
+        self.assertGreaterEqual(len(self.credential_readers()["container.py"]), 2)
+
+    def test_doctor_asks_the_resolver_once_rather_than_the_environment(self) -> None:
+        """One call, and it is handed the context's own `env` — the field that exists so no
+        check reads the ambient environment itself. Matched by prefix rather than as a whole
+        expression: the arguments are refactorable, and asserting them verbatim would make a
+        renamed local a failing test with no defect behind it."""
+        calls = [
+            call
+            for call in calls_on(doctor_module(), "container")
+            if call.startswith("container.credential_presence(")
+        ]
+        self.assertEqual(len(calls), 1)
+        self.assertIn("env=ctx.env", calls[0])
+
+
+class CommittedOnlyCheckTest(AdapterCheckTest):
+    """Three keys, three checks, and two channels each.
+
+    The local layer's violation is the loader's fact (`committed_only_violations`); the
+    environment's is doctor's own to notice, because `config._env_layer` drops those names by
+    construction and leaves nobody to report them.
+    """
+
+    KEYS: Final = (
+        ("env-keys", "container_env_keys", '["DATABASE_URL"]'),
+        ("cap-add", "container_cap_add", '["KILL"]'),
+        ("volumes", "container_volumes", '["cache:/cache"]'),
+    )
+    """Check name, key, and a legal value for it — restated by hand, like the check list."""
+
+    def test_a_clean_adapter_passes_all_three(self) -> None:
+        report = self.report()
+        for name, key, _ in self.KEYS:
+            with self.subTest(check=name):
+                self.assertEqual(report[name].status, "ok")
+                self.assertIn(key, report[name].message)
+
+    def test_the_committed_layer_is_where_these_keys_belong(self) -> None:
+        """Set in `config.toml`, which is the reviewable diff the rule exists to require."""
+        body = "".join(f"{key} = {value}\n" for _, key, value in self.KEYS)
+        self.make_adapter(self.repo, body=body)
+        report = self.report()
+        for name, _, _ in self.KEYS:
+            with self.subTest(check=name):
+                self.assertEqual(report[name].status, "ok")
+
+    def test_each_key_in_the_local_layer_fails_its_own_check(self) -> None:
+        self.make_local(self.adapter, "".join(f"{k} = {v}\n" for _, k, v in self.KEYS))
+        report = self.report()
+        for name, key, _ in self.KEYS:
+            with self.subTest(check=name):
+                self.assertEqual(report[name].status, "FAIL")
+                self.assertIn(key, report[name].message)
+                self.assertIn(config.LOCAL_FILE, report[name].message)
+                self.assertIn(config.COMMITTED_FILE, report[name].hint)
+
+    def test_one_key_in_the_local_layer_fails_only_its_own_check(self) -> None:
+        """Three checks rather than one line listing offenders: the two that are fine still
+        say so."""
+        self.make_local(self.adapter, 'container_cap_add = ["KILL"]\n')
+        report = self.report()
+        self.assertEqual(report["cap-add"].status, "FAIL")
+        self.assertEqual(report["env-keys"].status, "ok")
+        self.assertEqual(report["volumes"].status, "ok")
+
+    def test_the_environment_channel_is_reported_too(self) -> None:
+        """Added from issue 01's review, 2026-08-05. `config._env_layer` is built from
+        `KNOWN_KEYS` minus `COMMITTED_ONLY_KEYS`, so this variable is dropped before any
+        layer sees it and the loader has no violation fact to expose. Without this line the
+        one user who tries it gets silence."""
+        env = {config.ENV_PREFIX + key.upper(): "DATABASE_URL" for _, key, _ in self.KEYS}
+        report = self.report(env=env)
+        for name, key, _ in self.KEYS:
+            with self.subTest(check=name):
+                self.assertEqual(report[name].status, "FAIL")
+                self.assertIn(config.ENV_PREFIX + key.upper(), report[name].message)
+
+    def test_the_environment_channel_really_is_dropped_by_the_loader(self) -> None:
+        """The premise of the check above, asserted rather than assumed: if the loader ever
+        started reading these variables, this check would be reporting the wrong thing."""
+        variable = config.ENV_PREFIX + "CONTAINER_ENV_KEYS"
+        match config.load(start=self.repo, env={variable: "DATABASE_URL"}):
+            case Resolved(value=cfg):
+                self.assertEqual(cfg.get("container_env_keys"), [])
+                self.assertEqual(cfg.layer_of("container_env_keys"), "default")
+            case unresolved:
+                self.fail(f"the fixture adapter did not load: {unresolved}")
+
+    def test_both_channels_at_once_are_reported_in_one_line(self) -> None:
+        self.make_local(self.adapter, 'container_env_keys = ["DATABASE_URL"]\n')
+        line = self.report(env={config.ENV_PREFIX + "CONTAINER_ENV_KEYS": "X"})["env-keys"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn(config.LOCAL_FILE, line.message)
+        self.assertIn(config.ENV_PREFIX + "CONTAINER_ENV_KEYS", line.message)
+
+    def test_no_value_of_any_channel_is_printed(self) -> None:
+        """The key, never the value: a `container_env_keys` value is a list of secret names,
+        and the fix is spelled by the key alone."""
+        self.make_local(self.adapter, 'container_env_keys = ["SECRET_CLIENT_NAME"]\n')
+        line = self.report(env={config.ENV_PREFIX + "CONTAINER_VOLUMES": "/private-mount"})
+        output = rendered(list(line.values()))
+        self.assertNotIn("SECRET_CLIENT_NAME", output)
+        self.assertNotIn("private-mount", output)
+
+    def test_the_violation_comes_from_the_loaders_own_fact(self) -> None:
+        """Doctor renders `committed_only_violations`; it does not reimplement it (ADR
+        0002). Patched to name a different key, the check follows the loader."""
+        self.make_local(self.adapter, 'container_cap_add = ["KILL"]\n')
+        with mock.patch.object(config, "COMMITTED_ONLY_KEYS", frozenset()):
+            self.assertEqual(self.report()["cap-add"].status, "ok")
+
+
+class PromptsCheckTest(AdapterCheckTest):
+    """The override count. Informational, and `ok` whatever it says (ADR 0001)."""
+
+    def test_no_override_says_so(self) -> None:
+        line = self.report()["prompts"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("no override", line.message)
+
+    def test_an_override_is_reported_by_name_and_still_ok(self) -> None:
+        """An override is the feature, not a defect: a WARN here would train the reader to
+        ignore a line reporting a working configuration."""
+        self.make_override(self.adapter, prompts.REVIEW)
+        line = self.report()["prompts"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("1 of 3", line.message)
+        self.assertIn(prompts.REVIEW, line.message)
+
+    def test_overriding_everything_is_still_ok(self) -> None:
+        for name in prompts.TEMPLATE_NAMES:
+            self.make_override(self.adapter, name)
+        line = self.report()["prompts"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("3 of 3", line.message)
+
+    def test_a_file_that_is_not_a_template_is_not_counted(self) -> None:
+        """The count comes from `prompts.overridden`, which asks about the names the loader
+        would actually read — a glob would report drift `prompts.load` never sees."""
+        self.make_override(self.adapter, prompts.PR)
+        (self.adapter / prompts.OVERRIDE_DIR / "README.md").write_text("x", encoding="utf-8")
+        self.assertIn("1 of 3", self.report()["prompts"].message)
+
+
+class GhCheckTest(TempDirTest):
+    """`gh` opens the pull request that ends a run, and it does so last."""
+
+    def test_present_and_authenticated_is_ok(self) -> None:
+        self.assertEqual(by_name(doctor.run_checks(self.context()))["gh"].status, "ok")
+
+    def test_not_installed_is_a_fail_that_says_where_to_get_it(self) -> None:
+        missing = OSError(2, "No such file or directory", "gh")
+        line = by_name(doctor.run_checks(self.context(run=Spawns(gh=missing))))["gh"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("could not be run", line.message)
+        self.assertIn("cli.github.com", line.hint)
+
+    def test_not_authenticated_is_a_fail_that_says_to_log_in(self) -> None:
+        line = by_name(doctor.run_checks(self.context(run=Spawns(gh=GH_LOGGED_OUT))))["gh"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("not logged into any GitHub hosts", line.message)
+        self.assertIn("gh auth login", line.hint)
+
+    def test_a_wedged_gh_is_a_fail_rather_than_a_hang(self) -> None:
+        wedged = proc.TimeoutExpired(cmd=list(doctor.GH_ARGV), timeout=doctor.TIMEOUT_SECONDS)
+        line = by_name(doctor.run_checks(self.context(run=Spawns(gh=wedged))))["gh"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("did not finish within", line.message)
+
+
+class ImageCheckTest(AdapterCheckTest):
+    """The configured adapter image, present or not — and no staleness line, which is F5's."""
+
+    def configure(self, body: str) -> None:
+        self.adapter = self.make_adapter(self.repo, body=body)
+
+    def test_a_configured_image_that_exists_is_ok(self) -> None:
+        self.configure('image = "bessemer-adapter"\n')
+        line = self.report()["image"]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("bessemer-adapter", line.message)
+        self.assertIn("committed", line.message)
+
+    def test_a_configured_image_that_is_missing_is_a_fail_with_a_build_hint(self) -> None:
+        self.configure('image = "bessemer-adapter"\n')
+        line = self.report(run=Spawns(image=IMAGE_MISSING))["image"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("not present on this machine", line.message)
+        self.assertIn("No such image", line.message)
+        self.assertIn("build it", line.hint)
+
+    def test_no_image_key_is_a_fail_that_says_to_configure_one(self) -> None:
+        """`bessemer.config` gives `image` no default on purpose: a guess would replace this
+        line with a `docker run` failure further from the cause."""
+        line = self.report()["image"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("no image configured", line.message)
+        self.assertIn(config.COMMITTED_FILE, line.hint)
+
+    def test_an_image_that_is_not_a_name_is_a_line_rather_than_a_crash(self) -> None:
+        """A TOML number reaching the argv would crash `_probe` while building its message,
+        reporting bessemer's bug for the adopter's typo."""
+        self.configure("image = 7\n")
+        line = self.report()["image"]
+        self.assertEqual(line.status, "FAIL")
+        self.assertIn("not an image name", line.message)
+        self.assertNotIn("crashed", line.message)
+
+    def test_nothing_is_said_about_staleness(self) -> None:
+        """The pin's `image_staleness` compares against dependency inputs it knows by name —
+        adopter facts a stack-agnostic core cannot have. F5's, and a stale image still runs."""
+        self.configure('image = "bessemer-adapter"\n')
+        line = self.report()["image"]
+        self.assertNotIn("stale", (line.message + line.hint).lower())
+
+
 class DegradedTest(TempDirTest):
     """Doctor's whole point is to work when the things it checks are broken."""
 
@@ -719,9 +1204,48 @@ class DegradedTest(TempDirTest):
         report = doctor.run_checks(self.context())
         self.assertEqual(len(report), len(doctor.CHECKS))
         self.assertEqual(
-            [result.status for result in report], ["ok", "FAIL", "ok", "FAIL", "FAIL", "ok"]
+            [(result.name, result.status) for result in report],
+            [
+                ("uv", "ok"),
+                ("config", "FAIL"),
+                ("git-env", "ok"),
+                ("root", "FAIL"),
+                ("base", "FAIL"),
+                ("credential", "FAIL"),
+                ("env-keys", "FAIL"),
+                ("cap-add", "FAIL"),
+                ("volumes", "FAIL"),
+                ("prompts", "FAIL"),
+                ("gh", "ok"),
+                ("docker", "ok"),
+                ("image", "FAIL"),
+            ],
         )
         self.assertEqual(doctor.exit_code(report), 1)
+
+    def test_no_docker_no_config_and_no_git_still_produces_a_full_report(self) -> None:
+        """F1's through-line, re-proven with F3's checks in the list: everything the report
+        depends on broken at once, and every line still arrives — including the image check,
+        which is the first one that can be skipped by either of two other checks."""
+        missing = OSError(2, "No such file or directory")
+        spawns = Spawns(uv=missing, gh=missing, docker=missing, image=missing)
+        report = doctor.run_checks(self.context(run=spawns))
+        self.assertEqual(len(report), len(doctor.CHECKS))
+        self.assertNotIn("crashed", rendered(report))
+        self.assertEqual(doctor.exit_code(report), 1)
+
+    def test_the_image_check_names_docker_when_the_adapter_is_the_healthy_part(self) -> None:
+        """A stopped daemon reports every image missing, so the image line must not tell
+        someone whose image is built to go and build it."""
+        repo = self.make_repo(self.tmp / "repo")
+        self.make_adapter(repo, body='image = "bessemer-adapter"\n')
+        report = by_name(
+            doctor.run_checks(self.context(start=repo, run=Spawns(docker=DAEMON_DOWN)))
+        )
+        self.assertEqual(
+            report["image"].message,
+            "skipped — docker unavailable, fix the docker check above first",
+        )
 
     def test_nothing_in_a_degraded_report_is_a_crash(self) -> None:
         """A traceback rendered as a check line is still a bug — the reasons here are all
@@ -731,7 +1255,16 @@ class DegradedTest(TempDirTest):
 
     def test_a_missing_adapter_skips_the_checks_that_need_one(self) -> None:
         report = by_name(doctor.run_checks(self.context()))
-        for name in ("root", "base"):
+        for name in (
+            "root",
+            "base",
+            "credential",
+            "env-keys",
+            "cap-add",
+            "volumes",
+            "prompts",
+            "image",
+        ):
             self.assertEqual(report[name].status, "FAIL")
             self.assertTrue(report[name].message.startswith("skipped — "))
             self.assertIn("config", report[name].message)

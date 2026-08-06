@@ -24,7 +24,7 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | Lines | Region | Home | Issue | Pinning test |
 |---|---|---|---|---|
 | 1–228 | header doc, config comment | reference only | — | — |
-| 230–280 | roots, `.env` source, `have_claude_credential`, `image_staleness` | F3 (staleness is F5's) | 01, 09 | — |
+| 230–280 | roots, `.env` source, `have_claude_credential`, `image_staleness` | F3 (staleness is F5's) | 01, 09 | `tests.test_container.CredentialPresenceTest` (part) |
 | 282–301 | `status` intercept (docker-rows gathering) | F2 done; debt 3 wiring F3 | 10 | — |
 | 303–420 | `doctor` frame | F1, done | — | — |
 | 422–523 | `gc --force`: re-check, salvage-fetch, delete | **F3** (decision 1) | 11 | — |
@@ -39,7 +39,7 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 875–888 | `--base` ledger default chain | F3 (decision 4) | 10 | — |
 | 890–925 | `--feedback-edit` editor flow | F4 | — | — |
 | 927–940 | branch guards: exists, protected, base≠branch, not checked out | F3 | 10 | — |
-| 942–952 | preflight: docker, gh, credential, image presence | F3 | 09, 10 | — |
+| 942–952 | preflight: docker, gh, credential, image presence | F3 | 09, 10 | `tests.test_doctor` (part) |
 | 954–1002 | fetch, `BASE_SHA`, merge-base; `--hard-reset` block | F3 / hard-reset F4 | 10 | — |
 | 1004–1021 | `check_no_inflight_run` (lock pid + container name) | F3 | 10 | — |
 | 1028–1130 | run_task helpers: say/banner/step, notify, `claude_pass` | F3 | 07, 10 | `tests.test_passes` (part) |
@@ -94,6 +94,25 @@ no `pr merge`, `--draft` on every create. One thing arrived with it and is recor
 [ADR 0003](../../../docs/adr/0003-dispatch-structure.md) rather than here: `proc.run` and
 `proc.Runner` grew `stdin_text`, because the body reaches gh on a pipe and never as an
 argument, and gh answers a question rather than streaming.
+
+Issue 09 landed 2026-08-06: doctor grew the checks F3 earned — the credential, one check per
+committed-only key, the prompt-override count, `gh` and the image — so `:942–952`'s preflight
+questions are all answered host-side and pinned, **(part)** because refusing on them is issue
+10's half. `:344–346`'s `have_claude_credential` is ported as
+`container.credential_presence`, one definition with two callers, and `:230's` `.env` source is
+covered by it in the sense the pin used it (the file's names, read rather than exported);
+`image_staleness` stays F5's and doctor says nothing about it.
+
+**One divergence from the issue's own wording, measured rather than argued.** The issue said
+doctor's credential check reads the environment, which the pin could say safely because it
+sourced `.env` into its own environment first. Bessemer's container does not: `forwarding`
+reads the gitignored `.env` and nothing else, so a credential that exists only in the
+operator's shell never crosses. Read as the issue wrote it, doctor would FAIL the canonical
+setup (ADR 0001: "secrets stay in a gitignored `.bessemer/.env` only") and pass a machine whose
+runs cannot authenticate — both backwards. So the resolver answers about **both channels
+separately**, doctor FAILs the exported-only one naming the file as the fix, and
+`Credential.present` keeps the pin's union available for issue 10 to refuse on deliberately.
+That closes `bessemer/container.py`'s residual 2 rather than deferring it.
 
 `:1210–1212`'s `client/node_modules` pre-create was recorded here at issue 04 as hae adapter
 content, excised and owed no test. **Corrected at issue 06, 2026-08-05:** the *path* is hae's
