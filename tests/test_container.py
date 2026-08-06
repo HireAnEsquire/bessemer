@@ -134,6 +134,9 @@ class Double:
         timeout: float,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+        # Accepted and never read: `stdin_text` is `bessemer.landing`'s alone, and taking
+        # it is what keeps this double a `proc.Runner` rather than a near-miss.
+        stdin_text: str | None = None,
     ) -> proc.Result:
         self.calls.append(Call(tuple(argv), timeout, cwd, env))
         if self.scripted:
@@ -1092,6 +1095,7 @@ class StartTest(ContainerTest):
             timeout: float,
             cwd: Path | None = None,
             env: Mapping[str, str] | None = None,
+            stdin_text: str | None = None,
         ) -> proc.Result:
             seen.append((self.checkout / "node_modules").is_dir())
             return proc.Result(argv=tuple(argv), returncode=0, stdout="", stderr="")

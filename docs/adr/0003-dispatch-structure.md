@@ -25,7 +25,7 @@ home, and nowhere else.
   | `checkout.py` | create / `read_branch` / `salvage` / remove | The never-git-inside-the-checkout discipline: `--no-hardlinks` clone, identity config, textual `.git/HEAD` read, FF-only upload-pack fetch. |
   | `container.py` | `start` / `run_setup_hook` / `remove`; the argv builders `run_argv` / `chown_argv` / `setup_hook_argv` / `remove_argv`; `Boundary`, `forwarding` / `Forwarding` / `mount_points` / `SetupHookError` | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. |
   | `passes.py` | `run_pass(...) -> PassResult`; `review_loop(...) -> Verdict`; the argv builders `pass_argv` / `liveness_argv`; `review_prompt`; `Limits` | Retry ladder, per-pass timeout, stream-filter plumbing, heartbeat, dead-container abort, verdict-token parse, the round cap. |
-  | `landing.py` | `land(...) -> Landing` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
+  | `landing.py` | `land(...) -> Landing`; the argv builders `push_argv` / `count_argv` / `probe_argv` / `edit_argv` / `create_argv`; `body` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
   | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. |
   | `prompts.py` | `load(name) -> str`; `overridden(adapter_dir)`; `TEMPLATE_NAMES` | Package-default vs `.bessemer/prompts/` override resolution (ADR 0001). Two consumers at F3 already: the three passes, and doctor's override count — `overridden` exists so doctor never restates the override path (added at issue 03, 2026-08-05). |
   | `stream.py` | `filtered(transcript, *, emit) -> Capture`; `brief(inputs)` | The provider's stream-json: the `claude \|/>` rendering and final-text capture, which ADR 0001 names as one surface. Pure — no proc, no filesystem — because F3 README decision 5.1 moved it out of the container, where the pin ran it as `python3 /agentbox/stream-filter.py` (run.sh:1099) on an assumption about the adapter image. Its consumer at F3 is `passes.py`, which renders each attempt's transcript through it and reads the verdict out of the capture (added at issue 05, consumer landed at issue 07, both 2026-08-05). |
@@ -119,6 +119,16 @@ home, and nowhere else.
   the `docker exec` client and leaves the agent running in the container, wedging it for
   every later exec. `tests/test_proc.py::StreamTest` pins the absence, so it cannot be added
   back as a tidying.
+
+- **`proc.run` takes the text a child reads on stdin; `Runner` is still one declaration**
+  (added at issue 08, 2026-08-06). A pull request body is agent-written text that must reach
+  `gh pr edit|create --body-file -` as bytes on a pipe and never as a word of an argv (ADR
+  0001), and `gh` answers a question rather than streaming — so this is `run`'s call shape,
+  not `streamed`'s, and it arrives as `run`'s optional `stdin_text` rather than as a third
+  seam. `Runner` grew the parameter with it: its docstring says it is *the shape of `run`*,
+  and a protocol that had stopped being that would let a double drop a body silently while
+  the assertion "the body reached gh on stdin" had nothing to read. Every other call site in
+  the package omits it and gets `DEVNULL`; inheritance still has no spelling anywhere.
 
 - **The pass loop's two config knobs arrive as one value, `passes.Limits`, and it has no
   defaults** (added at issue 07, 2026-08-05). `container.Boundary`'s shape for

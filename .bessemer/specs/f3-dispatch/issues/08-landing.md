@@ -1,6 +1,6 @@
 # 08 — landing: push, draft PR, the body
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 02
 

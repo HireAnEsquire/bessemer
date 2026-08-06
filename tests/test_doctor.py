@@ -84,6 +84,9 @@ class Spawns:
         timeout: float,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+        # Accepted and never read: `stdin_text` is `bessemer.landing`'s alone, and taking
+        # it is what keeps this double a `proc.Runner` rather than a near-miss.
+        stdin_text: str | None = None,
     ) -> proc.Result:
         command = list(argv)
         self.calls.append((command, timeout))

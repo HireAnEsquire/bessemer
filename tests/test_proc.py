@@ -231,6 +231,40 @@ class StdinTest(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.stdout.split(), ["ready", "eof"])
 
+    def test_supplied_text_reaches_the_child_and_then_ends(self) -> None:
+        """`stdin_text` is a pipe written and closed, which is what `gh --body-file -`
+        reads a pull request body off (F3 issue 08).
+
+        Both halves in one assertion: the child reads the text, and the read *after* it
+        returns EOF. Text that arrived without the close would leave gh waiting on a body
+        it had already been given.
+        """
+        with terminal_on_stdin():
+            result = run(
+                python(
+                    *self.READER,
+                    "print('then ' + ('eof' if sys.stdin.read() == '' else 'more'))",
+                ),
+                timeout=self.BLOCKED,
+                stdin_text="a body\n",
+            )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.stdout.split(), ["ready", "read", "a", "body", "then", "eof"])
+
+    def test_supplied_text_is_still_not_the_terminal(self) -> None:
+        """The rule is that no child reaches bessemer's own stdin, and a pipe does not.
+
+        Without the pty fixture this asserts nothing — fd 0 under CI is already not a
+        terminal — which is `StdinTest`'s whole reason for existing.
+        """
+        with terminal_on_stdin():
+            result = run(
+                python("import sys", "print(sys.stdin.isatty())"),
+                timeout=self.BLOCKED,
+                stdin_text="",
+            )
+        self.assertEqual(result.stdout.strip(), "False")
+
 
 class MandatoryTimeoutTest(unittest.TestCase):
     """Required keyword, not a default — at every call site, both entry points."""

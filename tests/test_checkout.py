@@ -101,9 +101,10 @@ class Recorder:
         timeout: float,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+        stdin_text: str | None = None,
     ) -> proc.Result:
         self.calls.append(Call(tuple(argv), cwd))
-        return proc.run(argv, timeout=timeout, cwd=cwd, env=env)
+        return proc.run(argv, timeout=timeout, cwd=cwd, env=env, stdin_text=stdin_text)
 
     @property
     def argvs(self) -> list[tuple[str, ...]]:
@@ -584,9 +585,10 @@ class GitEnvTest(CheckoutTest):
             timeout: float,
             cwd: Path | None = None,
             env: Mapping[str, str] | None = None,
+            stdin_text: str | None = None,
         ) -> proc.Result:
             recorded.append(env)
-            return proc.run(argv, timeout=timeout, cwd=cwd, env=env)
+            return proc.run(argv, timeout=timeout, cwd=cwd, env=env, stdin_text=stdin_text)
 
         self.make_repo()
         os.environ["GIT_DIR"] = str(self.tmp / "elsewhere")

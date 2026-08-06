@@ -48,7 +48,7 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 1292–1431 | feature loop, per-issue `Status:` writes, checklist merge | F4 | — | — |
 | 1432–1492 | single-pass implement (feedback-only branches: F4) | F3 | 03, 07, 10 | `tests.test_passes` (part) |
 | 1494–1527 | review loop, verdict break | F3 | 07 | `tests.test_passes` |
-| 1529–1592 | push, PR-description pass, draft PR open/update | F3 | 08 | — |
+| 1529–1592 | push, PR-description pass, draft PR open/update | F3 | 08 | `tests.test_landing` (part) |
 | 1594–1644 | end notification, ledger append | F3 | 10 | — |
 | 1647–1724 | `--dry-run` plan | F5 | — | — |
 | 1726–1732 | dispatch entry | F3 | 10 | — |
@@ -83,6 +83,17 @@ is still issue 10's. Two things arrived with it and are recorded in
 (`proc.Streamer`, for the one child that takes a prompt on stdin and is rendered while it
 runs, and which deliberately has no host-side timeout), and `passes.Limits`, the parameter
 object that makes a non-numeric `pass_timeout` fail before any container work.
+
+Issue 08 landed 2026-08-06: `bessemer/landing.py` pins the push, the commits-past-boundary
+gate, the gh probe/edit/create and the body of `:1529–1592`, which is **(part)** for one
+reason — the PR-description *pass* in the middle of that region is `passes.run_pass` driven by
+issue 10, and landing takes its text as a value (decision 8.2's seam, and the one F4's feature
+loop reuses). Two riders discharged: the four sentences are hand-written literals on both
+sides, and the absences are asserted over every recorded argv of every path — no `--force*`,
+no `pr merge`, `--draft` on every create. One thing arrived with it and is recorded in
+[ADR 0003](../../../docs/adr/0003-dispatch-structure.md) rather than here: `proc.run` and
+`proc.Runner` grew `stdin_text`, because the body reaches gh on a pipe and never as an
+argument, and gh answers a question rather than streaming.
 
 `:1210–1212`'s `client/node_modules` pre-create was recorded here at issue 04 as hae adapter
 content, excised and owed no test. **Corrected at issue 06, 2026-08-05:** the *path* is hae's

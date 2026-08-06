@@ -29,9 +29,10 @@ in one file reads as two spellings of one thing. Past participle, like `filtered
 
 **No child ever inherits bessemer's stdin.** A child that can reach the terminal can block
 on a credential prompt until the timeout kills it, turning an authentication failure into a
-report of a hung process. See `_STDIN`. `streamed`'s child is the one exception, and it is
-not the same thing: its stdin is a pipe this process writes and closes, so it can no more
-reach the terminal than a `DEVNULL` one can.
+report of a hung process. See `_STDIN`. The two children given something to read are not
+exceptions to that: `streamed`'s prompt and `run`'s `stdin_text` are both a pipe this
+process writes and closes, so neither can reach the terminal any more than a `DEVNULL` one
+can.
 
 **`stderr` is credential-bearing. Do not forward it anywhere an outsider can read.**
 `git` and `gh` routinely echo remote URLs in their failure output, and a remote URL can
@@ -86,7 +87,7 @@ cannot execute anything. It is not a second entry point.
 """
 
 _STDIN = subprocess.DEVNULL
-"""Children never inherit bessemer's stdin, and this is not configurable.
+"""What a child gets on stdin when the caller supplies no text. Inheriting is not an option.
 
 Left inherited, a child gets bessemer's own terminal and can block on a prompt — `git`
 asking for an SSH key passphrase, `gh` asking to authenticate — for the entire timeout,
@@ -99,6 +100,11 @@ the whole timeout; with `DEVNULL` it reads EOF and returns in milliseconds.
 already not a terminal and the test would otherwise pass without the wrapper doing
 anything. It matters most on the F3 push path — the place a prompt is most plausible and
 nobody is watching.
+
+**`run`'s `stdin_text` replaces this with a pipe, and it is not a loosening.** The rule is
+that a child never reaches bessemer's own stdin; a pipe this process writes and closes
+reaches a string and then EOF, which is the property measured above. What has no spelling
+at all, here or in any parameter, is inheritance.
 """
 
 
@@ -238,7 +244,11 @@ class Runner(Protocol):
     table over the real `Result` type.
 
     A protocol rather than `Callable[..., Result]`, so a stand-in that quietly drops
-    `timeout` is a type error at the seam rather than a call that spawns without one.
+    `timeout` is a type error at the seam rather than a call that spawns without one. It is
+    **the shape of `run`, whole** — `stdin_text` included, added with it at F3 issue 08 —
+    for that same reason: a double that did not accept the text would drop a pull request
+    body silently, and the assertion "the body reached gh on stdin" would have nothing to
+    read.
 
     It lives here because it is the shape of this module's own function. It was declared in
     `doctor.py` first, at F1; F3 issue 04 needed the same protocol for `bessemer.checkout`
@@ -254,6 +264,7 @@ class Runner(Protocol):
         timeout: float,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+        stdin_text: str | None = None,
     ) -> Result: ...
 
 
@@ -275,6 +286,7 @@ def run(
     timeout: float,
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
+    stdin_text: str | None = None,
 ) -> Result:
     """Run `argv` to completion and report what happened. A nonzero exit is not an error.
 
@@ -295,6 +307,14 @@ def run(
     `env=None` means the child inherits this process's environment; see the module
     docstring for why that is the right default host-side. `stdin` is never inherited —
     see `_STDIN`.
+
+    **`stdin_text` is text this process writes down a pipe and closes**, for the one child
+    kind that takes input and still answers a question: `gh pr edit|create --body-file -`
+    (F3 issue 08). A pull request body is untrusted text an agent wrote, so it must reach gh
+    as bytes on a pipe and never as a word of an argv — the same rule that puts a pass's
+    prompt on `streamed`'s stdin, arriving here because gh is not a stream. `None` — the
+    default, and every other call site in the package — is `_STDIN`, and inheritance has no
+    spelling at all.
     """
     command = _command(argv)
     completed = subprocess.run(
@@ -302,7 +322,11 @@ def run(
         timeout=timeout,
         cwd=cwd,
         env=env,
-        stdin=_STDIN,
+        # `subprocess.run` refuses `input` and `stdin` **together**, so passing `None` for
+        # whichever is not in use is what lets one call serve both shapes: with text, it
+        # sets `stdin=PIPE` itself and writes it; without, the child gets `_STDIN`.
+        stdin=None if stdin_text is not None else _STDIN,
+        input=stdin_text,
         capture_output=True,
         text=True,
         # git output is not guaranteed to be UTF-8 — a branch name or an author line can
@@ -330,6 +354,12 @@ def run_checked(
 
     The signature is spelled out rather than forwarded through `**kwargs`, so `timeout`
     is a required keyword here too and not merely at the call `run` eventually makes.
+
+    **No `stdin_text` here, deliberately.** The two modules that check a child's exit status
+    write the raise themselves — `checkout._checked` and `landing._checked`, both so the raise
+    goes through the seam their caller handed in rather than through this module — so the one
+    child that is fed text never reaches this function. Adding the parameter for symmetry
+    would be surface with no call site.
     """
     result = run(argv, timeout=timeout, cwd=cwd, env=env)
     if not result.ok:

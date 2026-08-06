@@ -160,6 +160,9 @@ class Double:
         timeout: float,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+        # Accepted and never read: `stdin_text` is `bessemer.landing`'s alone, and taking
+        # it is what keeps this double a `proc.Runner` rather than a near-miss.
+        stdin_text: str | None = None,
     ) -> proc.Result:
         """The liveness probe. `docker ps -q` prints a container id, or nothing at all.
 
