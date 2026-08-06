@@ -86,6 +86,10 @@ ADR, not editing code.
 - **[docs/adr/0002-skeleton-structure.md](docs/adr/0002-skeleton-structure.md)** — the module
   boundaries of the skeleton: why config load is pure, why resolvers return values-or-reasons,
   and why one module owns every subprocess.
+- **[docs/adr/0003-dispatch-structure.md](docs/adr/0003-dispatch-structure.md)** — the six
+  modules dispatch is built from: pure plans, effectful executors, one quotability policy.
+- **[docs/adr/0004-run-liveness.md](docs/adr/0004-run-liveness.md)** — what makes a run live,
+  and why a container that is still `Up` can be an orphan. Forced by the F3 tracer.
 - **[ROADMAP.md](ROADMAP.md)** — build sequence, what's deliberately deferred, and the triggers
   that would reopen a parked decision.
 - **[CONTEXT.md](CONTEXT.md)** — the project's vocabulary, and the ambiguities it deliberately

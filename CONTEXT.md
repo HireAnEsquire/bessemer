@@ -54,6 +54,24 @@ Fast-forwarding the working branch in the main repository from a checkout, befor
 removed.
 _Avoid_: rescue, recover
 
+**In-flight**:
+A run whose **dispatcher process is alive** — the pid in `locks/<slug>.pid`. Liveness is a
+property of the dispatcher, not of the container: the container is one of the run's artifacts,
+like the checkout and the lock, and it can outlive the process that made it.
+_Avoid_: live, running, active
+
+**Orphan**:
+An artifact of a run that is no longer in-flight — a container, a checkout or a lock whose
+dispatcher is gone. What `gc` lists and `gc --force` reclaims. **A container that is still `Up`
+can be an orphan**, and that is the case the F3 tracer found (2026-08-06): the image's entrypoint
+is `sleep infinity`, so a container outlives a killed dispatcher indefinitely.
+
+The two signals compose asymmetrically, and the asymmetry is the whole rule: **`Up` is not proof
+of life; `Exited` is proof of death.** An exited container settles it alone — no lock overrides
+it, which matters because a lock file survives a reboot while the pid it names does not. A
+container that is `Up`, or absent, settles nothing, and the lock is asked.
+_Avoid_: stale, leftover, zombie, dangling
+
 ### Branches and landing
 
 **Working branch**:
