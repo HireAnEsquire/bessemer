@@ -27,7 +27,7 @@ host-side as each issue lands, making "a region nobody ported" visible at every 
 | 230–280 | roots, `.env` source, `have_claude_credential`, `image_staleness` | F3 (staleness is F5's) | 01, 09 | `tests.test_container.CredentialPresenceTest` (part) |
 | 282–301 | `status` intercept (docker-rows gathering) | F2 done; debt 3 wiring F3 | 10 | `tests.test_dispatch.RoundTripTest` |
 | 303–420 | `doctor` frame | F1, done | — | — |
-| 422–523 | `gc --force`: re-check, salvage-fetch, delete | **F3** (decision 1) | 11 | — |
+| 422–523 | `gc --force`: re-check, salvage-fetch, delete | **F3** (decision 1) | 11 | `tests.test_reclaim` |
 | 525–540 | config defaults: image, base, rounds, timeout, pids, memory, notify | F3 subset (notify verbosity excluded) | 01 | `test_config.SchemaTest` |
 | 542–596 | flag parse; feedback-conflict guards | F3 subset of flags | 10 | `tests.test_cli.SurfaceTest` |
 | 598–679 | no-arg picker, branch-creation carve-out | F5 | — | — |
@@ -154,6 +154,30 @@ divergences rather than the package's shape:
    truncates the base sha it already holds instead of spawning the pin's second
    `git rev-parse --short` (`:1730`) — a spawn for a display string is a spawn that can fail,
    and the number is longer rather than different.
+
+Issue 11 landed 2026-08-06: `bessemer/reclaim.py` and `gc --force` close `:422–523`, the last
+open row, and **F2 decision 9's fourth debtor entry is discharged** — both suite gaps are now
+tests over `bessemer/gc.py`'s existing behaviour, each measured red against a one-token mutant
+of the module and green against the real one (`live_slugs` widened to every container;
+`render_gc_plan`'s class filter dropped). The executor consumes `render_gc_plan`'s text rather
+than `GcItem`s, so that filter is the one it acts behind.
+
+Two divergences from the pin, both recorded rather than found later:
+
+1. **An unanswerable `docker ps` keeps the item.** The pin re-checks through a command
+   substitution, so a failed probe yields the empty string and reads as "no container" — a
+   broken daemon lets the `rm -rf` proceed. That is the same unverifiable liveness the
+   docker-down arm refuses the *whole run* over, one item down; answering it two ways would
+   make the whole-run refusal a posture the per-item loop does not hold. `bessemer.passes`
+   reads the same silence the opposite way and is right to, which is why only
+   `container.liveness_argv` is shared and each caller owns its failure arm (ADR 0003).
+2. **"inside the clone" becomes "inside the checkout"** in the non-fast-forward skip line.
+   CONTEXT.md's resolved ambiguity: **clone** is the verb, **checkout** the noun. Adopter-facing
+   prose, inside no upstream assertion — the same rule as the `bessemer-` prefix rename.
+
+One shape arrived with it and is in [ADR 0003](../../../docs/adr/0003-dispatch-structure.md)
+rather than here: `liveness_argv` moved from `passes.py` to `container.py`, with an alias left
+behind, when reclaim became its second consumer.
 
 **And the ruling issue 10 owed** (acceptance criterion 7): the implement prompt's SPEC section
 names `/spec.md` and the dispatcher's generated preamble (`:1476–1477`) repeats it — **kept**.

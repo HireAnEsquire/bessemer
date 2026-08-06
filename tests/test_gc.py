@@ -139,6 +139,29 @@ class CollectGcItemsTest(unittest.TestCase):
         self.assertEqual(items[0].slug, "leaked")
         self.assertTrue(items[0].deletable)
 
+    def test_a_checkout_whose_container_has_exited_is_still_an_orphan(self) -> None:
+        """Bessemer's own, and F2 decision 9's fourth debtor entry (a): no test in either
+        repo asserted that `live_slugs` holds **live** containers only.
+
+        Measured there and re-measured here: widening it to every container — the one-token
+        mutation `{c.slug for c in containers}` — leaves the whole suite green without this,
+        and a checkout whose container merely *exited* then stops being reported as an
+        orphan. `bessemer/reclaim.py` walks this plan and removes what is in it, so the gap
+        is a run's work sitting in a checkout gc has quietly stopped naming. Both classes
+        are asserted, in plan order, because the container arm is what makes the mutation
+        reachable: with only the checkout asserted the row would still be here for the wrong
+        reason.
+        """
+        (self.checkouts_dir / "my-branch").mkdir()
+
+        items = self.collect(docker_rows=("bessemer-my-branch\tExited (0) 1 hour ago",))
+
+        self.assertEqual(
+            [(i.cls, i.slug) for i in items],
+            [("container", "my-branch"), ("checkout", "my-branch")],
+        )
+        self.assertEqual([i.deletable for i in items], [True, True])
+
     @ported_from("CollectGcItemsTests", "test_checkout_with_live_container_is_excluded")
     def test_a_checkout_with_a_live_container_is_excluded(self) -> None:
         (self.checkouts_dir / "my-branch").mkdir()
@@ -291,6 +314,25 @@ class RenderGcPlanTest(unittest.TestCase):
         ]
 
         self.assertEqual(gc.render_gc_plan(items), "container\ta")
+
+    def test_an_unknown_class_is_filtered_out_even_when_it_is_deletable(self) -> None:
+        """Bessemer's own, and F2 decision 9's fourth debtor entry (b): the class filter was
+        never exercised alone.
+
+        Upstream's fixture — inherited byte for byte above — has one unknown-class item and
+        it is also `deletable=False`, so dropping `and i.cls in _GC_DELETABLE_CLASSES`
+        leaves the suite green: the deletable half of the condition already excluded the row.
+        Here the unknown class is the *only* thing keeping it out, which is the half
+        `bessemer/reclaim.py` depends on — the executor dispatches on the class it reads off
+        this plan, so a `log (rotated)` line reaching it is a line naming the one artifact
+        gc must never delete (ADR 0001).
+        """
+        items = [
+            gc.GcItem("checkout", "b", "1h ago", "1K", "rm", True),
+            gc.GcItem("log (rotated)", "c", "1h ago", "1K", "kept", True),
+        ]
+
+        self.assertEqual(gc.render_gc_plan(items), "checkout\tb")
 
     @ported_from("RenderGcPlanTests", "test_empty_items_gives_empty_plan")
     def test_no_items_gives_an_empty_plan(self) -> None:

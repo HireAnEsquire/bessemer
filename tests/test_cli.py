@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from bessemer import cli, doctor, proc
+from bessemer import cli, doctor, proc, reclaim
 from bessemer.doctor import CheckResult
 from tests.port_manifest import ported_from
 
@@ -329,6 +329,107 @@ class CmdGcTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertIn("no .bessemer/ directory found", err)
         self.assertIn("hint:", err)
+
+
+class CmdGcForceTest(unittest.TestCase):
+    """`gc --force`: what the subcommand prints, what it exits with, and what it refuses.
+
+    The executor's own behaviour is `tests/test_reclaim.py`'s — this is the wiring, and the
+    two things only the wiring can get wrong: the listing still comes first (an operator reads
+    what is about to go before it goes), and a docker-down refusal reaches stderr with a
+    nonzero exit rather than being rendered as a quiet success.
+
+    `cli._docker_rows` is patched for `CmdGcTest`'s reason. `bessemer.reclaim.execute_gc_plan`
+    is patched here and only here, because the real one would reach `proc.run` and
+    `tests/guard.py` does not allowlist `docker` — the call it *would* have made is what is
+    asserted instead.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / ".bessemer" / "specs").mkdir(parents=True)
+
+    def run_force(
+        self, *, rows: list[str], docker_down: bool, report: reclaim.ReclaimReport
+    ) -> tuple[int, str, str, mock.MagicMock]:
+        with (
+            mock.patch.object(cli, "_docker_rows", return_value=(rows, docker_down)),
+            mock.patch.object(cli, "_start", return_value=self.root),
+            mock.patch.object(reclaim, "execute_gc_plan", return_value=report) as execute,
+        ):
+            code, out, err = run_cli("gc", "--force")
+        return code, out, err, execute
+
+    def report(
+        self, *outcomes: reclaim.Outcome, refused: bool = False
+    ) -> reclaim.ReclaimReport:
+        return reclaim.ReclaimReport(outcomes=outcomes, refused=refused)
+
+    def test_the_listing_is_printed_before_anything_is_reclaimed(self) -> None:
+        code, out, _, execute = self.run_force(
+            rows=["bessemer-my-branch\tExited (0) 1 hour ago"],
+            docker_down=False,
+            report=self.report(),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("Orphaned bessemer artifacts", out)
+        self.assertIn("my-branch", out)
+        execute.assert_called_once()
+
+    def test_the_plan_the_executor_gets_is_the_scan_that_was_just_printed(self) -> None:
+        _, _, _, execute = self.run_force(
+            rows=["bessemer-my-branch\tExited (0) 1 hour ago"],
+            docker_down=False,
+            report=self.report(),
+        )
+
+        self.assertEqual(execute.call_args.args[0], "container\tmy-branch")
+        self.assertFalse(execute.call_args.kwargs["docker_down"])
+
+    def test_a_down_daemon_refuses_on_stderr_and_exits_nonzero(self) -> None:
+        code, out, err, _ = self.run_force(
+            rows=[], docker_down=True, report=self.report(refused=True)
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn(reclaim.REFUSED_DOCKER_DOWN, err)
+        self.assertNotIn(reclaim.REFUSED_DOCKER_DOWN, out)
+        # And no trailing blank line under the listing: a separator above nothing is one an
+        # operator has to wonder about, so it is written by the first emitted line or never.
+        self.assertFalse(out.endswith("\n\n"))
+
+    def test_a_failed_reclaim_exits_nonzero(self) -> None:
+        failed = reclaim.Outcome(
+            cls="container", slug="broken", action=reclaim.Action.FAILED, line="  !! failed"
+        )
+
+        code, _, _, _ = self.run_force(rows=[], docker_down=False, report=self.report(failed))
+
+        self.assertEqual(code, 1)
+
+    def test_plan_and_force_cannot_be_combined(self) -> None:
+        """Two different jobs asked of one command; argparse refuses rather than this file
+        teaching a precedence rule."""
+        code, _, err = run_cli("gc", "--plan", "--force")
+
+        self.assertEqual(code, 2)
+        self.assertIn("not allowed with argument", err)
+
+    def test_without_force_nothing_is_executed_at_all(self) -> None:
+        """The default is unchanged and this is what says so: `gc` alone never reaches the
+        one module in the package that deletes."""
+        with (
+            mock.patch.object(cli, "_docker_rows", return_value=([], False)),
+            mock.patch.object(cli, "_start", return_value=self.root),
+            mock.patch.object(reclaim, "execute_gc_plan") as execute,
+        ):
+            code, _, _ = run_cli("gc")
+
+        self.assertEqual(code, 0)
+        execute.assert_not_called()
 
 
 class SurfaceTest(unittest.TestCase):

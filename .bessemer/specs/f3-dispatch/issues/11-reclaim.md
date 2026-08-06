@@ -1,6 +1,6 @@
 # 11 — reclaim: gc --force, and the pins that come first
 
-Status: Todo
+Status: Done
 Type: AFK
 Blocked by: 04
 
@@ -46,14 +46,14 @@ absence (no argv and no file operation ever names the logs dir).
 
 ## Acceptance criteria
 
-- [ ] The two debt 4 pins land first and are named in the report; each shown red against
+- [x] The two debt 4 pins land first and are named in the report; each shown red against
       a mutated `gc.py` copy, green against the real one
-- [ ] Scripted scenarios: stale plan where an item went live between scan and delete →
+- [x] Scripted scenarios: stale plan where an item went live between scan and delete →
       skipped, nothing touched for it; detached checkout → kept + loud; non-FF → kept +
       loud; clean orphan set → all three classes reclaimed in order
-- [ ] Docker-down `--force` refusal: no deletion argv recorded at all, exit nonzero,
+- [x] Docker-down `--force` refusal: no deletion argv recorded at all, exit nonzero,
       ported message
-- [ ] Logs-untouched absence assertion
-- [ ] Partial failure (container rm fails) → remaining items still processed, exit
+- [x] Logs-untouched absence assertion
+- [x] Partial failure (container rm fails) → remaining items still processed, exit
       nonzero
-- [ ] `make check` green
+- [x] `make check` green

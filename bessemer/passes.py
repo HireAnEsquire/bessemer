@@ -87,6 +87,7 @@ from typing import Final
 
 from bessemer import proc, stream
 from bessemer.container import DOCKER
+from bessemer.container import liveness_argv as _container_liveness_argv
 
 CLAUDE_ARGV: Final = (
     "claude",
@@ -358,14 +359,14 @@ def pass_argv(*, container: str, limits: Limits) -> list[str]:
     ]
 
 
-def liveness_argv(*, container: str) -> list[str]:
-    """`docker ps -q -f name=^<container>$` — the pin's own dead-container predicate (:1123).
+liveness_argv = _container_liveness_argv
+"""`bessemer.container.liveness_argv`, under the name this module and its tests already use.
 
-    Anchored, because `docker ps -f name=x` is a substring match: without the anchors a run on
-    branch `fix` would read `bessemer-fix-2`'s container as its own and retry into a container
-    belonging to somebody else's run.
-    """
-    return [DOCKER, "ps", "-q", "-f", f"name=^{container}$"]
+The declaration moved next door at issue 11, when `bessemer.reclaim` became its second
+consumer — the anchoring is a container fact, and two spellings of an anchored `docker ps`
+are two chances for one of them to lose a `^`. An assignment rather than a bare import so the
+name is an explicit export: ADR 0003 lists it under this module's interface, and it still is.
+"""
 
 
 def review_prompt(template: str, *, branch: str, boundary: str) -> str:

@@ -23,10 +23,10 @@ home, and nowhere else.
   |---|---|---|
   | `dispatch.py` | `dispatch(...) -> RunOutcome` | Orchestration: the guard sequence, lock acquire/release, log rotation, cleanup ordering (run.sh's trap semantics as try/finally), the step counter, the end notification. The only module the CLI calls. |
   | `checkout.py` | create / `read_branch` / `salvage` / remove | The never-git-inside-the-checkout discipline: `--no-hardlinks` clone, identity config, textual `.git/HEAD` read, FF-only upload-pack fetch. |
-  | `container.py` | `start` / `run_setup_hook` / `remove`; the argv builders `run_argv` / `chown_argv` / `setup_hook_argv` / `remove_argv`; `Boundary`, `forwarding` / `Forwarding` / `mount_points` / `SetupHookError`; `credential_presence` / `Credential` | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. `credential_presence` is the pin's `have_claude_credential` with one definition and two callers — doctor's check and issue 10's preflight — and it lives here because this module owns `CREDENTIAL_NAMES` and the file those names cross through (added at issue 09, 2026-08-06). |
+  | `container.py` | `start` / `run_setup_hook` / `remove`; the argv builders `run_argv` / `chown_argv` / `setup_hook_argv` / `remove_argv` / `liveness_argv`; `Boundary`, `forwarding` / `Forwarding` / `mount_points` / `SetupHookError`; `credential_presence` / `Credential` | The whole privilege surface: `--cap-drop ALL` plus the six cap-adds, pids/memory limits, the mount table with `:ro`, explicit `-e` env from declared keys, the root-exec-chown vs agent-sudo distinction (run.sh:1273 vs :1278), the verbatim sudoers invocation string. `credential_presence` is the pin's `have_claude_credential` with one definition and two callers — doctor's check and issue 10's preflight — and it lives here because this module owns `CREDENTIAL_NAMES` and the file those names cross through (added at issue 09, 2026-08-06). |
   | `passes.py` | `run_pass(...) -> PassResult`; `review_loop(...) -> Verdict`; the argv builders `pass_argv` / `liveness_argv`; `review_prompt`; `Limits` | Retry ladder, per-pass timeout, stream-filter plumbing, heartbeat, dead-container abort, verdict-token parse, the round cap. |
   | `landing.py` | `land(...) -> Landing`; the argv builders `push_argv` / `count_argv` / `probe_argv` / `edit_argv` / `create_argv`; `body` | Push (plain, `-u`, explicit refspec), PR probe/create/update via `gh` with the body on stdin, body composition and footer, the commits-past-boundary gate. |
-  | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. |
+  | `reclaim.py` | `execute_gc_plan(plan) -> ReclaimReport`; `Action` / `Outcome` / `ReclaimReport`; the two operator sentences `REFUSED_DOCKER_DOWN` / `BANNER` | gc `--force`: per-item liveness re-check (container and lock pid), per-class actions, salvage-before-remove via `checkout.salvage`, skip-loudly semantics. `plan` is `gc.render_gc_plan`'s text, so the class filter the plan already applied is the one the executor acts behind (landed at issue 11, 2026-08-06). |
   | `prompts.py` | `load(name) -> str`; `overridden(adapter_dir)`; `TEMPLATE_NAMES` | Package-default vs `.bessemer/prompts/` override resolution (ADR 0001). Two consumers at F3 already: the three passes, and doctor's override count — `overridden` exists so doctor never restates the override path (added at issue 03, 2026-08-05). |
   | `stream.py` | `filtered(transcript, *, emit) -> Capture`; `brief(inputs)` | The provider's stream-json: the `claude \|/>` rendering and final-text capture, which ADR 0001 names as one surface. Pure — no proc, no filesystem — because F3 README decision 5.1 moved it out of the container, where the pin ran it as `python3 /agentbox/stream-filter.py` (run.sh:1099) on an assumption about the adapter image. Its consumer at F3 is `passes.py`, which renders each attempt's transcript through it and reads the verdict out of the capture (added at issue 05, consumer landed at issue 07, both 2026-08-05). |
 
@@ -40,6 +40,17 @@ home, and nowhere else.
   times.** At the pin the identical FF-only fetch-from-checkout appears at run.sh:508 (gc
   block), :1177 (cleanup trap) and :1538 (landing). Three spellings of a security-relevant
   refspec are three chances for one to grow a `+`; one function, three callers.
+
+- **The anchored container-liveness argv is declared in `container.py`** (moved at issue 11,
+  2026-08-06). `passes.py` wrote it, `reclaim.py` became its second consumer, and the move is
+  `proc.Runner`'s at issue 04 for the same reason: two spellings of `docker ps -q -f
+  name=^…$` are two chances for one to lose an anchor, and unanchored it matches
+  `bessemer-fix-2` for a run on `fix` — which for reclaim means reading a live neighbour's
+  container as the dead one it is about to delete. `passes.liveness_argv` is now an alias, so
+  the pass loop and its tests keep the spelling they had and the row above is unchanged. What
+  the two consumers do *not* share is what an unanswerable `docker ps` means: `passes` reads
+  silence as "no container" and aborts, `reclaim` reads it as "assume live" and keeps. Same
+  question, opposite safe directions, so only the argv is shared and each owns its failure arm.
 
 - **`gc.py` stays pure; the deleter is `reclaim.py`.** F2's no-subprocess property in the
   data layer is a property, not an accident — it is what keeps gc's scan-and-plan tests

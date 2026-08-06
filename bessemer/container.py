@@ -827,6 +827,40 @@ def remove_argv(*, container: str) -> list[str]:
     return [DOCKER, "rm", "-f", "-v", container]
 
 
+def liveness_argv(*, container: str) -> list[str]:
+    """`docker ps -q -f name=^<container>$` — the pin's own container-liveness predicate
+    (:1123 for a pass, :465 for gc's per-item re-check).
+
+    Anchored, because `docker ps -f name=x` is a substring match: without the anchors a run on
+    branch `fix` would read `bessemer-fix-2`'s container as its own and retry into a container
+    belonging to somebody else's run — and `bessemer.reclaim`, asking the same question before
+    an `rm -rf`, would read a *live* neighbour as the dead container it is about to delete.
+
+    **Declared here rather than in `bessemer.passes`, where it was written** (moved at issue
+    11, 2026-08-06). It is a question about a container, and the anchoring above is the whole
+    of it; a second consumer arriving is exactly when a declaration moves to the module whose
+    surface it encodes rather than being spelled twice — `proc.Runner`'s move out of
+    `doctor.py` at issue 04, one module along. `passes.liveness_argv` is now an alias of this
+    name, so the pass loop and its tests keep the spelling they had.
+
+    What the two consumers do **not** share is what a docker that cannot answer means:
+    `passes` reads silence as "no container" and aborts, `reclaim` reads it as "assume live"
+    and keeps. Same question, opposite safe directions — which is why only the argv is shared
+    and each caller owns its own failure arm.
+    """
+    return [DOCKER, "ps", "-q", "-f", f"name=^{container}$"]
+
+
+LIVENESS_TIMEOUT_SECONDS: Final = 15.0
+"""The deadline on the probe above. A backstop, not a deadline on anything real.
+
+Beside the argv rather than at each caller, and moved here with it at issue 11: a wedged
+daemon must not hang either consumer, and two copies of one number are two chances for one of
+them to become a value somebody tuned for the wrong caller. What the consumers still own
+separately is what the expiry *means* — see `liveness_argv`.
+"""
+
+
 class SetupHookError(Exception):
     """The adapter's setup hook exited nonzero, so the dispatch aborts (ADR 0001).
 

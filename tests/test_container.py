@@ -1262,6 +1262,7 @@ class ModuleShapeTest(unittest.TestCase):
         "chown_argv",
         "setup_hook_argv",
         "remove_argv",
+        "liveness_argv",
         "start",
         "run_setup_hook",
         "remove",
@@ -1272,6 +1273,11 @@ class ModuleShapeTest(unittest.TestCase):
     `credential_presence` joined them at F3 issue 09, which is where doctor gained the check
     that needs it — one more public function is a decision to take to the ADR, not a diff to
     wave through, the treatment `tests/test_checkout.py` gives its four.
+
+    `liveness_argv` joined them at issue 11, and it is a *move* rather than a growth:
+    `bessemer.passes` declared it, `bessemer.reclaim` became its second consumer, and the
+    anchored `docker ps -q -f name=^…$` is a container question. `passes.liveness_argv` is an
+    alias, so the ADR's `passes` row is unchanged and this one gained a name.
     """
 
     TYPES: Final = ("Boundary", "Forwarding", "Credential", "SetupHookError")
