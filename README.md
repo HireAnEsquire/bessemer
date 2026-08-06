@@ -107,6 +107,17 @@ of the commit hook so commits stay fast; `make check` is what has to be green.
 The unit suite is documented in [tests/README.md](tests/README.md), including the guard that keeps
 it free of Docker, the network, and the ambient git repository.
 
+The tests that genuinely need a Docker daemon live outside that suite, behind their own target:
+
+```
+make tracer-tests
+```
+
+They build the adapter image, run the sudoers grant and the setup hook inside a real container,
+and drive one whole dispatch to a real failure. Not part of `make check` and not part of CI — see
+[tests/integration/README.md](tests/integration/README.md) for what they need from a machine, and
+[docs/f3-tracer-runbook.md](docs/f3-tracer-runbook.md) for the human-run dogfood beside them.
+
 ## Security posture, in brief
 
 The full set of invariants is in ADR 0001. The short version:

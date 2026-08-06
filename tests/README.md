@@ -23,6 +23,19 @@ daemon, the network, or the ambient repository turns CI green-when-lucky, and th
 that matters most is F2's mechanical port of 337 tests, where CI is the only thing
 watching.
 
+## The tests that need a daemon live somewhere else
+
+`tests/integration/` and `make tracer-tests` — tier 3, ruled by the F3 spec's decision 2. It
+builds the adapter image, runs the setup hook, and drives one whole dispatch to a real
+container; it is not part of `make check` and not part of CI.
+
+The split is deliberate and asymmetric: **the guard stays armed everywhere `make check` reaches,
+and the docker tests are kept out of its reach rather than let through it.** An exemption inside
+the guard — a flag, an environment variable, a marked test — would weaken it for the unit suite
+too, which is the suite CI actually runs. `tests/integration/README.md` says what that target
+needs from a machine; `tests/test_tiers.py`, in this suite, pins that discovery from the
+repository root collects none of it.
+
 ## The constraint is enforced, not requested
 
 `tests/guard.py` arms itself from `tests/__init__.py`, before any test module is imported.

@@ -18,9 +18,17 @@ FROM python:3.14-slim-trixie
 # `git` because the agent commits on the working branch and pre-commit shells out to it; the
 # slim base ships without it. `sudo` for exactly the one grant below. `curl` and
 # `ca-certificates` for the CLI install in the next layer.
+#
+# **`make` because this repository's VERIFY step is `make check`**, and the base image has none —
+# measured on `python:3.14-slim-trixie`, `command -v make` finds nothing. It belongs here rather
+# than in the setup hook for the reason `git` does: it is part of the stack the image *is*, not a
+# dependency of the checkout. Missing, the first dogfood dispatch pays for a whole implement pass
+# and then fails at verification with `make: command not found`, which reads as the agent's
+# mistake rather than as the image's.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sudo \
       git \
+      make \
       curl \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*

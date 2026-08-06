@@ -22,7 +22,8 @@ also the only honest test of it. F7 lives in the hae repository, not this one.
 Repo layout (the `bessemer/` package: cli, config, doctor, and the module boundaries that fall
 out of them), `pyproject.toml` with the CLI entry point and `requires-python`, the config module
 (two-layer TOML, the full precedence chain, base-branch auto-detect via `origin/HEAD`), doctor
-ported, plus **bessemer's own minimal adapter** — a trivial Dockerfile and a no-op setup hook — so
+ported, plus **bessemer's own minimal adapter** — a trivial Dockerfile and a setup hook that was a
+no-op until F3 issue 12 gave it its one real step, installing `uv` — so
 that dogfooding can begin at F3 rather than waiting for F6's scaffolding.
 
 *Tracer:* `uvx --from . bessemer doctor` runs green.

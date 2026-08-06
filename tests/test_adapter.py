@@ -83,6 +83,7 @@ IGNORED_PATHS: Final = (
 TRACKED_PATHS: Final = (
     ".bessemer/config.toml",
     ".bessemer/Dockerfile",
+    ".bessemer/.dockerignore",
     ".bessemer/setup.sh",
     ".bessemer/prompts/implement-prompt.md",
     ".bessemer/prompts/review-prompt.md",
@@ -237,9 +238,13 @@ class SetupHookTest(unittest.TestCase):
     """The hook's file properties. **That it exits 0 and is idempotent is not covered here.**
 
     Running it would mean spawning a shell, which the guard's allowlist denies — deliberately,
-    since `bash` is a program no test needs to execute. It is a dev-machine check:
+    since `bash` is a program no test needs to execute.
 
-        .bessemer/setup.sh && .bessemer/setup.sh
+    It is not a dev-machine check either, and this paragraph used to say it was. Since F3 issue
+    12 the hook installs `uv` into `/usr/local/bin` as root, so running it on a developer's
+    machine writes to that machine rather than to a container.
+    `tests/integration/test_setup_hook.py` owns both properties now: it runs this file in a real
+    container, the way dispatch runs it, and runs it twice.
     """
 
     HOOK: Final = ADAPTER_DIR / "setup.sh"
@@ -253,6 +258,49 @@ class SetupHookTest(unittest.TestCase):
     def test_the_hook_declares_an_interpreter(self) -> None:
         first_line = self.HOOK.read_text(encoding="utf-8").splitlines()[0]
         self.assertTrue(first_line.startswith("#!"), first_line)
+
+
+class DockerignoreTest(unittest.TestCase):
+    """What docker may see when it builds this image, and what it must not.
+
+    The build context is the adapter directory, and at dispatch time that directory holds the
+    gitignored `.env` — an LLM credential — plus every live run's checkout. The Dockerfile has
+    no `COPY` and no `ADD`, so the honest context is empty, and the file says exactly that.
+
+    The file's own comment records what that does and does not buy today; what is asserted here
+    is only that the rules stay the two they are, because the failure mode is an addition.
+
+    Text assertions, like `DockerfileTest`'s and for the same reason: the suite builds nothing.
+    """
+
+    RULES: Final = ["*", "!Dockerfile"]
+    """The whole file, comments dropped, restated by hand.
+
+    Equality rather than "denies `.env`", because this file is widened by *addition*: a `!.env`
+    or a `!config.local.toml` appended below would leave every containment assertion true while
+    putting a credential back in the context.
+    """
+
+    def rules(self) -> list[str]:
+        text = (ADAPTER_DIR / ".dockerignore").read_text(encoding="utf-8")
+        return [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    def test_the_rules_are_exactly_these(self) -> None:
+        self.assertEqual(self.rules(), self.RULES)
+
+    def test_nothing_re_admits_the_secrets_file(self) -> None:
+        """The property the equality above happens to satisfy, named so it cannot be lost by
+        someone editing the list for an unrelated reason.
+
+        `container.SECRETS_FILE` rather than the string, so renaming the credential file cannot
+        leave this test guarding a filename nothing uses.
+        """
+        readmitted = [rule.removeprefix("!") for rule in self.rules() if rule.startswith("!")]
+        self.assertNotIn(container.SECRETS_FILE, readmitted)
 
 
 def dockerfile_instructions() -> list[tuple[str, str]]:
@@ -336,6 +384,28 @@ class DockerfileTest(unittest.TestCase):
 
     def keyword(self, name: str) -> list[str]:
         return [body for keyword, body in self.instructions if keyword == name]
+
+    APT_PACKAGES: Final = ["sudo", "git", "make", "curl", "ca-certificates"]
+    """Everything the image installs on top of the base, restated by hand and in file order.
+
+    A list this adapter owns, so it is pinned rather than read: each entry is here for a named
+    reason — `sudo` for the one grant, `git` because the agent commits in-container, `make`
+    because this repository's VERIFY step is `make check`, `curl` and `ca-certificates` for the
+    agent CLI's installer — and a deletion is silent until a run fails inside a container.
+
+    `make` is the measured case, and the reason this test exists at all: the image shipped
+    without it, `make check` is what both prompt overrides tell the agent to run, and the gap
+    would have surfaced only after a whole implement pass had been paid for.
+    """
+
+    def test_the_image_installs_exactly_these_packages(self) -> None:
+        installs = [body for body in self.keyword("RUN") if "apt-get install" in body]
+        self.assertEqual(len(installs), 1, installs)
+        _, _, rest = installs[0].partition("--no-install-recommends")
+        # Up to the `&&`, and equality against the whole list: a sixth package appended before
+        # the cleanup would leave every containment check true, which is how a list grows
+        # without anyone deciding it should.
+        self.assertEqual(rest.partition("&&")[0].split(), self.APT_PACKAGES)
 
     def test_the_uid_is_a_build_argument(self) -> None:
         self.assertEqual(self.keyword("ARG"), ["AGENT_UID=1000"])

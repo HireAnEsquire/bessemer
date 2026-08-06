@@ -1,0 +1,22 @@
+# What docker may see when it builds this adapter's image. Everything, minus everything.
+#
+# `.bessemer/Dockerfile` has no `COPY` and no `ADD`: it installs packages and creates a user, and
+# it needs no file from this directory at all. So the honest context is empty, and the two lines
+# below say that — deny all, then name the one file the build is. The second line is belt and
+# braces rather than load bearing: docker finds the Dockerfile whether or not a pattern excludes
+# it, and it is written out so that a reader of the first line is not left wondering.
+#
+# **What it buys, stated exactly, because the obvious claim is not the true one.** Measured on
+# this repository with BuildKit (`docker build … .bessemer`): the build runs *no* context-load
+# step at all, with or without this file, because nothing in the Dockerfile asks for one. So the
+# claim is not "this makes the build fast today".
+#
+# The claim is about what the context *is* when something does ask. The build context is the
+# adapter directory, and at dispatch time that directory holds `.env` — the gitignored LLM
+# credential — `config.local.toml`, the logs, and every live run's `checkouts/<slug>`, each a full
+# checkout of this repository. The first `COPY` anyone adds, the classic builder, or a
+# BuildKit frontend that reads the context for any other reason, each turns that from a
+# hypothetical into a transfer. "Nothing copies the credential in" is a weaker property than "the
+# credential was never sent", and only the second one survives an edit to the Dockerfile.
+*
+!Dockerfile

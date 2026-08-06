@@ -18,6 +18,18 @@ WORK_DIR := .make
 # Gitignored. Kept rather than discarded, so a failed run is still readable afterwards.
 FILE_LIST := $(WORK_DIR)/checked-files
 TEST_LOG := $(WORK_DIR)/unittest.log
+TRACER_LOG := $(WORK_DIR)/tracer.log
+
+# Tier 3 (F3 README decision 2): the tests that need a live Docker daemon, in a directory of
+# their own and behind a target of their own. **Never reached by `check` below**, and that is
+# the decision rather than an omission — `tests/guard.py` stays armed everywhere `make check`
+# reaches, so the alternative would be an exemption *inside* the guard, which weakens it for
+# the unit suite too.
+#
+# The directory is deliberately not a package: `unittest discover` walks past a directory with
+# no `__init__.py`, so `check` cannot collect these files even if someone names one `test_*.py`
+# — which they all are. `tests/test_tiers.py` pins that, and pins that this target exists.
+TRACER_DIR := tests/integration
 
 # Every file in the tree that git is not ignoring — tracked, plus untracked.
 #
@@ -62,8 +74,12 @@ CHECKED_FILES := git ls-files -z --cached --others --exclude-standard --deduplic
 # shutdown — an unraisable exception, a `ResourceWarning: unclosed socket` — lands after the
 # summary and displaces it. That fails a suite that passed, which is the safe direction, but a
 # message asserting "the run did not finish" would send the reader hunting a vanished runner.
-SUITE_FINISHED := tail -n 1 $(TEST_LOG) | grep -Eq '^OK( \(.*\))?$$'
-DID_NOT_FINISH := $(TEST_LOG) does not end in a unittest summary line. Either the runner vanished mid-suite, or something wrote to stderr after the summary — read the last lines above to see which
+#
+# Written with `$(call …)` and a log-file argument so that the tier-3 target below gates its own
+# run the same way. Two copies of this rule would be two things to keep in step, and the copy
+# that can rot without failing anything is the one guarding the suite run less often.
+SUITE_FINISHED = tail -n 1 $(1) | grep -Eq '^OK( \(.*\))?$$'
+DID_NOT_FINISH = $(1) does not end in a unittest summary line. Either the runner vanished mid-suite, or something wrote to stderr after the summary — read the last lines above to see which
 
 .PHONY: check
 check:
@@ -71,4 +87,20 @@ check:
 	$(CHECKED_FILES) >$(FILE_LIST)
 	xargs -0 uv run pre-commit run --files <$(FILE_LIST)
 	uv run python -u -m unittest discover 2>$(TEST_LOG); status=$$?; cat $(TEST_LOG) >&2; exit $$status
-	@$(SUITE_FINISHED) || { echo "$(DID_NOT_FINISH)"; exit 1; }
+	@$(call SUITE_FINISHED,$(TEST_LOG)) || { echo "$(call DID_NOT_FINISH,$(TEST_LOG))"; exit 1; }
+
+# Tier 3. Not part of `check`, and not part of CI: it needs a running Docker daemon, `gh` on
+# `PATH`, and the network — it builds the adapter image and its setup hook installs `uv`.
+#
+# `-t $(TRACER_DIR)` as well as `-s`: the top-level directory is the tier-3 directory itself, so
+# these modules import as top level names and `tests/__init__.py` — which arms the guard that
+# denies `docker` — is never imported. Running them as `tests.integration.*` would fail every
+# docker call in a way that reads as the daemon being down.
+#
+# Read `$(TRACER_DIR)/README.md` before running this: it says what the target touches on your
+# machine, which is more than `check` does.
+.PHONY: tracer-tests
+tracer-tests:
+	@mkdir -p $(WORK_DIR)
+	uv run python -u -m unittest discover -s $(TRACER_DIR) -t $(TRACER_DIR) 2>$(TRACER_LOG); status=$$?; cat $(TRACER_LOG) >&2; exit $$status
+	@$(call SUITE_FINISHED,$(TRACER_LOG)) || { echo "$(call DID_NOT_FINISH,$(TRACER_LOG))"; exit 1; }

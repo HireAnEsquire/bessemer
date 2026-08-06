@@ -68,3 +68,20 @@ strict = true
 # subset of a package produces incomplete results — it can report success on a broken tree.
 # The pre-commit hook sets `pass_filenames: false` so this list is what it actually checks.
 files = ["bessemer", "tests"]
+# Tier 3 (`tests/integration/`) is deliberately not a package: `unittest discover` walks past a
+# directory with no `__init__.py`, which is what keeps `make check` from collecting tests that
+# need Docker, and `make tracer-tests` runs them with that directory as the top level, so they
+# import `support` as a top-level name.
+#
+# `namespace_packages = false` is what makes mypy agree with that runner, and it is the second
+# thing tried. Left at its default, mypy derives a module name from the whole relative path —
+# `tests.integration.support` — and reports every tier-3 module as an unresolved `import support`.
+# Adding `mypy_path = "tests/integration"` then makes the same file nameable two ways and mypy
+# refuses it outright: "Source file found twice under different module names". With namespace
+# packages off, the name is derived by walking up only while `__init__.py` exists, which stops at
+# `tests/integration` and yields `support` — the same name at type-check time and at run time,
+# from one setting.
+#
+# Nothing else in this repository is a namespace package — `bessemer` and `tests` both have an
+# `__init__.py` — so the setting costs nothing elsewhere.
+namespace_packages = false

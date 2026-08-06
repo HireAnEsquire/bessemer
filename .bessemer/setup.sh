@@ -10,18 +10,56 @@
 # baked layer goes stale against the checkout's own lockfile anyway. That is the main reason
 # the hook exists at all.
 #
-# Bessemer's own needs none of it. The suite is stdlib `unittest` with zero runtime
-# dependencies, no database, and — by construction (issue 01a) — no daemon and no network. So
-# this hook is a no-op, and it is committed as one rather than omitted: F3 runs the hook
-# unconditionally, and an adapter is a contract, so the file has to be here and has to exit 0.
+# Bessemer's own is nearly that small: the suite is stdlib `unittest` with zero runtime
+# dependencies, no database, and — by construction (issue 01a) — no daemon and no network. One
+# step is left, and it is the one the previous version of this file predicted in a comment and
+# did not do: **`uv` is what runs the checks, and the image does not carry it.**
 #
-# It must stay idempotent and non-interactive. The agent may legally re-run it mid-run to
-# revive something that died, which is what the image's single sudoers line grants root for.
-# Doing nothing is idempotent for free; anything added here has to earn that back.
+# Why here and not in `.bessemer/Dockerfile`: installing uv is dependency installation, and the
+# thing it installs dependencies for is the checkout, which the image never sees. The image is
+# the stack; the hook is what the stack needs to run *this* tree.
 #
-# Note for whoever adds the first real step: bessemer's checks run through `uv`, which this
-# adapter's image does not carry. Installing it is dependency installation, so it belongs here
-# rather than in the Dockerfile.
+# Why `/usr/local/bin`: the hook runs as root through the one sudoers grant, so `$HOME` here is
+# root's, and an installer's default of `~/.local/bin` would put uv somewhere the agent user
+# cannot reach. `/usr/local/bin` is on both users' `PATH` — on sudo's `secure_path` for this
+# script, and on the agent's for every pass afterwards.
+#
+# The agent's half is the half that is measured: `tests/integration/test_setup_hook.py` runs this
+# hook in a real container and then asks the *agent* user where `uv` is. Root's half is asserted
+# by this script itself — the read-back at the bottom runs under the same `secure_path` this
+# paragraph claims, and fails the hook if it is wrong.
+#
+# **What this deliberately does not do: `uv sync`.** Root creating `/workspace/.venv` would hand
+# the agent a virtualenv it cannot write, and the first `uv run` would fail on permissions
+# rather than on anything the agent did. The agent's own `make check` builds the environment as
+# itself, once, and that is the correct owner.
+#
+# It must stay idempotent and non-interactive. The agent may legally re-run it mid-run to revive
+# something that died, which is what the image's single sudoers line grants root for. The
+# `command -v` below is what buys that back: a second run installs nothing and exits 0.
 set -euo pipefail
 
-echo "setup: nothing to do — bessemer's suite is stdlib unittest with no services."
+# Where the installer puts the binary, and its instruction to leave shell profiles alone — a
+# hook that edits `.bashrc` is a hook whose effect depends on which shell the next step happens
+# to start.
+export UV_INSTALL_DIR=/usr/local/bin
+export INSTALLER_NO_MODIFY_PATH=1
+
+if command -v uv >/dev/null 2>&1; then
+    echo "setup: uv already installed ($(uv --version)) — nothing to do."
+    exit 0
+fi
+
+echo "setup: installing uv into ${UV_INSTALL_DIR}"
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Read back through `PATH` rather than through `${UV_INSTALL_DIR}/uv`: what the next step needs is
+# a uv the shell can find, and an installer that wrote somewhere else must fail *here*, where the
+# message names the hook, rather than as a missing command inside `make check`.
+#
+# On its own line, not inside the `echo`. Measured: `echo "… $(uv --version)"` reports the status
+# of `echo`, so with no uv on `PATH` the substitution prints `command not found` to stderr and the
+# hook prints `setup: installed ` and **exits 0** — `set -e` does not see a failure in a command
+# substitution inside a successful command. The check has to be a command of its own.
+installed=$(uv --version)
+echo "setup: installed ${installed}"
