@@ -79,7 +79,12 @@ class ParseDockerRowsTest(unittest.TestCase):
         self.assertEqual(status.parse_docker_rows([]), [])
 
 
-class StaleLocksTest(unittest.TestCase):
+class OrphanLocksTest(unittest.TestCase):
+    """`stale_locks` is `orphan_locks` now (ADR 0004, issue 13c): the container has nothing
+    to do with a lock's orphan status, only its pid does, so every fixture below drives that
+    signal through a mocked `pid_alive` rather than a `running_slugs` set that no longer
+    exists."""
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -89,24 +94,27 @@ class StaleLocksTest(unittest.TestCase):
     def test_a_lock_with_no_matching_container_is_stale(self) -> None:
         (self.locks_dir / "orphaned.pid").write_text("123")
 
-        self.assertEqual(status.stale_locks(self.locks_dir, set()), ["orphaned"])
+        with mock.patch.object(status, "pid_alive", return_value=False):
+            self.assertEqual(status.orphan_locks(self.locks_dir), ["orphaned"])
 
     @ported_from("StaleLocksTests", "test_lock_with_matching_container_is_not_stale")
     def test_a_lock_with_a_matching_container_is_not_stale(self) -> None:
         (self.locks_dir / "live.pid").write_text("123")
 
-        self.assertEqual(status.stale_locks(self.locks_dir, {"live"}), [])
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            self.assertEqual(status.orphan_locks(self.locks_dir), [])
 
     @ported_from("StaleLocksTests", "test_missing_locks_dir_returns_empty")
     def test_a_missing_locks_directory_has_no_stale_locks(self) -> None:
-        self.assertEqual(status.stale_locks(self.locks_dir / "does-not-exist", set()), [])
+        self.assertEqual(status.orphan_locks(self.locks_dir / "does-not-exist"), [])
 
     @ported_from("StaleLocksTests", "test_results_are_sorted")
     def test_the_results_come_back_sorted(self) -> None:
         (self.locks_dir / "zeta.pid").write_text("1")
         (self.locks_dir / "alpha.pid").write_text("2")
 
-        self.assertEqual(status.stale_locks(self.locks_dir, set()), ["alpha", "zeta"])
+        with mock.patch.object(status, "pid_alive", return_value=False):
+            self.assertEqual(status.orphan_locks(self.locks_dir), ["alpha", "zeta"])
 
 
 class OverallOutcomeTest(unittest.TestCase):
@@ -209,6 +217,11 @@ class FormatTableTest(unittest.TestCase):
 
 
 class RenderRunningTest(unittest.TestCase):
+    """ADR 0004, issue 13c: liveness comes from `gc.classify_liveness`, so every fixture
+    below that involves a lock drives its pid signal through a mocked `status.pid_alive`
+    rather than a real one — reading `/proc` for a fixture's made-up pid text would be
+    flaky, exactly the reason `tests/test_gc.py` mocks the same name on `gc`."""
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -218,14 +231,20 @@ class RenderRunningTest(unittest.TestCase):
 
     @ported_from("RenderRunningTests", "test_docker_down_skips_containers_and_lock_check")
     def test_docker_down_skips_containers_and_the_lock_check(self) -> None:
-        (self.locks_dir / "orphan.pid").write_text("1")
+        """Recorded divergence from the pin (ADR 0004): upstream's docker-down arm gave up
+        on the section entirely. Bessemer's in-flight signal is the lock's pid, which needs
+        no daemon, so a live lock still renders as running — from the locks alone — beside
+        the one line naming what the down daemon actually costs."""
+        (self.locks_dir / "my-branch.pid").write_text("1")
 
-        lines = status.render_running([], True, self.logs_dir, self.locks_dir)
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            lines = status.render_running([], True, self.logs_dir, self.locks_dir)
 
-        self.assertEqual(
-            lines,
-            ["Running", "  docker unavailable (daemon down?) — Recent below is unaffected"],
-        )
+        joined = "\n".join(lines)
+        self.assertIn("docker unavailable", joined)
+        self.assertIn("in-flight runs below are read from the locks", joined)
+        self.assertIn("my-branch", joined)
+        self.assertIn(f"tail -f {self.logs_dir}/my-branch.log", joined)
 
     @ported_from("RenderRunningTests", "test_no_containers_says_so")
     def test_no_running_containers_says_so(self) -> None:
@@ -237,9 +256,12 @@ class RenderRunningTest(unittest.TestCase):
         "RenderRunningTests", "test_live_container_row_includes_branch_uptime_and_tail_command"
     )
     def test_a_container_row_carries_branch_uptime_and_tail_command(self) -> None:
-        lines = status.render_running(
-            ["bessemer-my-branch\tUp 5 minutes"], False, self.logs_dir, self.locks_dir
-        )
+        (self.locks_dir / "my-branch.pid").write_text("1")
+
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            lines = status.render_running(
+                ["bessemer-my-branch\tUp 5 minutes"], False, self.logs_dir, self.locks_dir
+            )
 
         joined = "\n".join(lines)
         self.assertIn("my-branch", joined)
@@ -250,19 +272,87 @@ class RenderRunningTest(unittest.TestCase):
     def test_a_stale_lock_is_flagged_when_no_container_matches(self) -> None:
         (self.locks_dir / "orphan.pid").write_text("1")
 
-        lines = status.render_running([], False, self.logs_dir, self.locks_dir)
+        with mock.patch.object(status, "pid_alive", return_value=False):
+            lines = status.render_running([], False, self.logs_dir, self.locks_dir)
 
-        self.assertTrue(any("stale lock: orphan" in line for line in lines))
+        self.assertTrue(any("orphan: orphan" in line for line in lines))
+        self.assertTrue(any("reclaim with: bessemer gc --force" in line for line in lines))
 
     @ported_from("RenderRunningTests", "test_lock_with_live_container_not_flagged")
     def test_a_lock_with_a_live_container_is_not_flagged(self) -> None:
         (self.locks_dir / "my-branch.pid").write_text("1")
 
-        lines = status.render_running(
-            ["bessemer-my-branch\tUp 5 minutes"], False, self.logs_dir, self.locks_dir
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            lines = status.render_running(
+                ["bessemer-my-branch\tUp 5 minutes"], False, self.logs_dir, self.locks_dir
+            )
+
+        self.assertFalse(any("orphan" in line for line in lines))
+
+    def test_an_up_container_with_a_dead_lock_pid_is_an_orphan_not_a_run(self) -> None:
+        """The tracer's own scenario (ADR 0004, finding 1): a `kill -9`'d dispatcher leaves
+        the container `Up` indefinitely (`sleep infinity`). `Up` is not proof of life, so
+        this must not render as a running row — only as the marked orphan line naming the
+        remedy."""
+        (self.locks_dir / "tracer-dogfood.pid").write_text("999999")
+
+        with mock.patch.object(status, "pid_alive", return_value=False):
+            lines = status.render_running(
+                ["bessemer-tracer-dogfood\tUp 10 minutes"], False, self.logs_dir, self.locks_dir
+            )
+
+        joined = "\n".join(lines)
+        self.assertIn("  no running tasks", lines)
+        self.assertNotIn("tail -f", joined)
+        self.assertIn(
+            "  ⚠ orphan: tracer-dogfood (Up 10 minutes, no live dispatcher owns it)"
+            " — reclaim with: bessemer gc --force",
+            lines,
         )
 
-        self.assertFalse(any("stale lock" in line for line in lines))
+    def test_docker_down_still_lists_an_in_flight_run_from_its_lock_alone(self) -> None:
+        lines = status.render_running([], True, self.logs_dir, self.locks_dir)
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("docker unavailable", lines[1])
+
+        (self.locks_dir / "still-going.pid").write_text("1")
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            lines = status.render_running([], True, self.logs_dir, self.locks_dir)
+
+        joined = "\n".join(lines)
+        self.assertIn("still-going", joined)
+        self.assertIn(f"tail -f {self.logs_dir}/still-going.log", joined)
+
+    def test_an_unreadable_lock_is_kept_and_said_out_loud_not_offered_for_reclaim(self) -> None:
+        # A directory where a lock file is expected raises IsADirectoryError (an OSError) on
+        # read_text — the same trick tests/test_gc.py uses for the same fact.
+        (self.locks_dir / "mystery.pid").mkdir()
+
+        lines = status.render_running([], False, self.logs_dir, self.locks_dir)
+
+        joined = "\n".join(lines)
+        self.assertIn("mystery", joined)
+        self.assertIn("could not be read", joined)
+        self.assertNotIn("reclaim with: bessemer gc --force", joined)
+
+
+class RunningOperatorSentencesTest(unittest.TestCase):
+    """Bessemer's own: the two operator lines issue 13c adds, hand-written whole —
+    `test_reclaim.py`'s `test_the_..._sentence_is_the_pin` pattern. An assertion built from
+    the constant it is checking cannot notice that constant changing, which is why every
+    other test in this module that looks for these sentences in rendered output spells the
+    words again rather than importing the name."""
+
+    def test_the_orphan_remedy_sentence_is_the_pin(self) -> None:
+        self.assertEqual(status._ORPHAN_REMEDY, "reclaim with: bessemer gc --force")
+
+    def test_the_docker_down_running_sentence_is_the_pin(self) -> None:
+        self.assertEqual(
+            status._DOCKER_DOWN_RUNNING,
+            "docker unavailable (daemon down?) — in-flight runs below are read from the"
+            " locks; container uptime can't be shown",
+        )
 
 
 class RenderRecentTest(unittest.TestCase):
@@ -353,14 +443,16 @@ class RenderStatusTest(unittest.TestCase):
                 "task_dir": str(self.specs_dir / "my-feature"),
             },
         )
+        (self.locks_dir / "my-feature.pid").write_text("123")
         (self.locks_dir / "gone.pid").write_text("999")
 
-        out = self.render(["bessemer-my-feature\tUp 10 minutes"], False)
+        with mock.patch.object(status, "pid_alive", side_effect=lambda text: text == "123"):
+            out = self.render(["bessemer-my-feature\tUp 10 minutes"], False)
 
         self.assertIn("my-feature", out)
         self.assertIn("Up 10 minutes", out)
         self.assertIn(f"tail -f {self.logs_dir}/my-feature.log", out)
-        self.assertIn("stale lock: gone", out)
+        self.assertIn("orphan: gone", out)
         self.assertIn("01✓ 02✗", out)
         self.assertIn("https://github.com/org/repo/pull/9", out)
 
@@ -384,9 +476,12 @@ class RenderStatusTest(unittest.TestCase):
 
     @ported_from("CmdStatusTests", "test_reads_docker_rows_from_stdin")
     def test_docker_rows_handed_in_reach_the_running_table(self) -> None:
-        out = self.render(["bessemer-my-branch\tUp 1 minute"], False)
+        (self.locks_dir / "my-branch.pid").write_text("123")
 
-        self.assertIn("my-branch", out)
+        with mock.patch.object(status, "pid_alive", return_value=True):
+            out = self.render(["bessemer-my-branch\tUp 1 minute"], False)
+
+        self.assertIn(f"tail -f {self.logs_dir}/my-branch.log", out)
 
     @ported_from("CmdStatusTests", "test_docker_down_does_not_read_stdin")
     def test_docker_down_ignores_rows_handed_in(self) -> None:

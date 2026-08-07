@@ -44,10 +44,19 @@ bessemer's ledger dropped that call, so a specs directory holding only legacy pe
 `runs.jsonl` files renders as "no runs recorded".
 
 **What F3 owes this module.** `render_running` builds `tail -f <logs_dir>/<slug>.log` lines
-and `stale_locks` reads `<locks_dir>/*.pid`; `LOGS_DIR` and `LOCKS_DIR` below say where the
+and `orphan_locks` reads `<locks_dir>/*.pid`; `LOGS_DIR` and `LOCKS_DIR` below say where the
 CLI looks for both, under the adapter directory. Nothing writes either yet — F3's dispatch
 must write its logs and locks exactly there, or status will render a healthy-looking blank
 over live runs.
+
+**Liveness is ADR 0004's, read rather than restated.** `render_running` classifies every
+slug it sees through `gc.classify_liveness` (issue 13a) — the twelve-cell table lives once,
+in `gc.py`, and this module imports the answer instead of re-deriving it. The import is
+local to `render_running` rather than at module level: `gc.py` already imports from this
+module at load time, so a top-level import back here would fail depending on which of the
+two a caller happens to reach first, and would succeed or fail differently in the test
+suite than in the CLI — a local import defers it to call time, when both modules are
+already fully loaded regardless of order.
 """
 
 import os
@@ -119,12 +128,33 @@ def parse_docker_rows(rows: list[str]) -> list[ContainerInfo]:
     return containers
 
 
-def stale_locks(locks_dir: Path, running_slugs: set[str]) -> list[str]:
-    """Lock files with no matching live container, sorted for stable output. Read-only
-    cross-check only — no cleanup (that's gc, issue 05 of F2)."""
+def _lock_pid_alive(locks_dir: Path, slug: str) -> bool | None:
+    """status's own read of the lock signal `classify_liveness` needs (ADR 0004): `True`/
+    `False` once the file is read (no file at all is `False`, the ordinary shape of an
+    orphan), `None` when it exists but could not be read. Read fresh here rather than
+    through `gc._lock_pid_alive` — that one is `gc`'s own, its module docstring says so —
+    the shared thing between the two modules is `classify_liveness` itself, never the
+    reading that feeds it."""
+    try:
+        pid_text = (locks_dir / f"{slug}.pid").read_text()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    return pid_alive(pid_text)
+
+
+def orphan_locks(locks_dir: Path) -> list[str]:
+    """Lock files whose pid is dead, sorted for stable output (ADR 0004's lock signal alone).
+    A lock's orphan status never depended on a matching container — `stale_locks` asked "no
+    container?", which is the same conflation the ADR retires, so there is no
+    `running_slugs` here to ask it with. Read-only cross-check only — no cleanup (that's gc,
+    issue 05 of F2)."""
     if not locks_dir.is_dir():
         return []
-    return sorted(p.stem for p in locks_dir.glob("*.pid") if p.stem not in running_slugs)
+    return sorted(
+        p.stem for p in locks_dir.glob("*.pid") if _lock_pid_alive(locks_dir, p.stem) is False
+    )
 
 
 def _overall_outcome(record: Record) -> str:
@@ -209,27 +239,73 @@ def format_table(
     return lines
 
 
+_ORPHAN_REMEDY: Final = "reclaim with: bessemer gc --force"
+"""What every orphan line in `render_running` ends with — naming the fix, not just the
+fact. Dropping the line would hide the problem; a line that says there is one without
+saying what to do about it is the same hole one word narrower."""
+
+_DOCKER_DOWN_RUNNING: Final = (
+    "docker unavailable (daemon down?) — in-flight runs below are read from the locks;"
+    " container uptime can't be shown"
+)
+"""Running's docker-down line (ADR 0004, recorded divergence from the pin). Upstream's
+arm gave up on the section entirely, which was correct while "running" meant "a container
+is `Up`". An in-flight run is a live pid in a lock file and needs no daemon to read, so the
+section keeps listing; what the daemon being down actually costs is container uptime, and
+this says that instead of the blanket give-up."""
+
+
 def render_running(
     docker_rows: list[str], docker_down: bool, logs_dir: Path, locks_dir: Path
 ) -> list[str]:
-    """The Running section, as lines. With the daemon down it is one honest line and no
-    lock check — a lock cannot be called stale when nothing can say what is running."""
+    """The Running section, as lines: in-flight runs only (ADR 0004) — a container the
+    daemon still calls `Up` is never one of them once its dispatcher is gone. An orphan
+    like that renders as a marked line beneath the table, naming the remedy, rather than
+    vanishing: dropping it would hide the problem, which is worse than the lie "nothing is
+    running" would otherwise tell. Classification is `gc.classify_liveness`'s (issue 13a),
+    read rather than restated — see the module docstring for why the import happens inside
+    this function rather than at the top of the module.
+
+    With the daemon down, every slug's container fact is simply absent
+    (`container_status=None`), the same "not `Up` right now" reading `reclaim`'s own
+    docker-down probe already gives the table, so the lock alone still answers whether a
+    run is in-flight and the section keeps listing rather than giving up.
+    """
+    from bessemer.gc import Liveness, classify_liveness
+
     lines = ["Running"]
-    if docker_down:
-        lines.append("  docker unavailable (daemon down?) — Recent below is unaffected")
-        return lines
-    containers = parse_docker_rows(docker_rows)
-    if containers:
-        table = format_table(
-            ["BRANCH", "UPTIME", "LOG"],
-            [[c.slug, c.uptime, f"tail -f {logs_dir}/{c.slug}.log"] for c in containers],
-            truncate_cols={0},
+    containers = (
+        {} if docker_down else {c.slug: c.uptime for c in parse_docker_rows(docker_rows)}
+    )
+    lock_slugs = {p.stem for p in locks_dir.glob("*.pid")} if locks_dir.is_dir() else set()
+
+    running_rows = []
+    flagged_lines = []
+    for slug in sorted(set(containers) | lock_slugs):
+        classification = classify_liveness(
+            container_status=containers.get(slug),
+            lock_pid_alive=_lock_pid_alive(locks_dir, slug),
         )
+        if classification.liveness is Liveness.IN_FLIGHT:
+            running_rows.append(
+                [slug, containers.get(slug, "-"), f"tail -f {logs_dir}/{slug}.log"]
+            )
+        elif classification.liveness is Liveness.ORPHAN:
+            detail = classification.reason
+            if slug in containers:
+                detail = f"{containers[slug]}, {detail}"
+            flagged_lines.append(f"  ⚠ orphan: {slug} ({detail}) — {_ORPHAN_REMEDY}")
+        else:
+            flagged_lines.append(f"  ⚠ {slug}: {classification.reason}")
+
+    if docker_down:
+        lines.append(f"  {_DOCKER_DOWN_RUNNING}")
+    if running_rows:
+        table = format_table(["BRANCH", "UPTIME", "LOG"], running_rows, truncate_cols={0})
         lines.extend(f"  {row}" for row in table)
-    else:
+    elif not docker_down:
         lines.append("  no running tasks")
-    for slug in stale_locks(locks_dir, {c.slug for c in containers}):
-        lines.append(f"  ⚠ stale lock: {slug} (no matching container)")
+    lines.extend(flagged_lines)
     return lines
 
 

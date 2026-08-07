@@ -1514,33 +1514,52 @@ class RoundTripTest(DispatchTest):
         """The mutation the issue asks for, run and restored. `status` finds a run's log under
         `status.LOGS_DIR`; dispatch writes it under the same name because it *is* the same
         name. Point one of them somewhere else and the round trip stops working — which is
-        what says this test would notice."""
-        self.dispatch(self.approved())
+        what says this test would notice.
+
+        Both renders are taken mid-dispatch (the same `stream` hook
+        `test_a_live_run_is_visible_while_it_is_still_running` uses), while the lock this
+        process itself holds is still on disk: under ADR 0004 a run is in-flight only while
+        its dispatcher's pid is live, and a lock read after `self.dispatch` returns has
+        already been released, which would make the row an orphan — with no log line at all
+        — for a reason that has nothing to do with `LOGS_DIR`."""
         rows = [f"{NAME}\tUp 2 minutes"]
+        captured: dict[str, str] = {}
+
+        double = self.approved()
+        original = double.stream
+
+        def watching(*args: object, **kwargs: object) -> proc.Result:
+            captured["agreeing"] = self.render(rows)
+            with mock.patch.object(status, "LOGS_DIR", "somewhere-else"):
+                captured["elsewhere"] = status.render_status(
+                    specs_dir=self.specs,
+                    logs_dir=self.adapter / status.LOGS_DIR,
+                    locks_dir=self.adapter / status.LOCKS_DIR,
+                    docker_rows=rows,
+                    docker_down=False,
+                    limit=10,
+                )
+            # Restored, still mid-dispatch: a mutation test that left the constant moved
+            # would take every later test in this class with it.
+            self.assertEqual(status.LOGS_DIR, "logs")
+            captured["restored"] = self.render(rows)
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+
+        with mock.patch.object(double, "stream", watching):
+            self.dispatch(double)
 
         # Agreeing: the `tail -f` path status prints is the file dispatch actually wrote.
-        agreeing = self.render(rows)
-        self.assertIn(f"tail -f {self.log}", agreeing)
+        self.assertIn(f"tail -f {self.log}", captured["agreeing"])
         self.assertTrue(self.log.is_file())
 
         # Disagreeing: point status at another directory and it hands the operator a path to
         # a file that is not there. The round trip is the two names being one name.
-        with mock.patch.object(status, "LOGS_DIR", "somewhere-else"):
-            elsewhere = status.render_status(
-                specs_dir=self.specs,
-                logs_dir=self.adapter / status.LOGS_DIR,
-                locks_dir=self.adapter / status.LOCKS_DIR,
-                docker_rows=rows,
-                docker_down=False,
-                limit=10,
-            )
-        self.assertNotIn(f"tail -f {self.log}", elsewhere)
-        self.assertIn(f"tail -f {self.adapter / 'somewhere-else'}/{SLUG}.log", elsewhere)
+        self.assertNotIn(f"tail -f {self.log}", captured["elsewhere"])
+        self.assertIn(
+            f"tail -f {self.adapter / 'somewhere-else'}/{SLUG}.log", captured["elsewhere"]
+        )
 
-        # Restored, and proven restored — a mutation test that left the constant moved would
-        # take every later test in this class with it.
-        self.assertEqual(status.LOGS_DIR, "logs")
-        self.assertEqual(self.render(rows), agreeing)
+        self.assertEqual(captured["restored"], captured["agreeing"])
 
     def test_gc_sees_no_orphan_after_a_run_that_finished(self) -> None:
         items = gc.collect_gc_items(
