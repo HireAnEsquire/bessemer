@@ -38,18 +38,31 @@ string is inside any upstream assertion. The header's docker-down clause still s
 its dispatcher must satisfy.
 
 **What a scan does with a checkout that is currently in use** (F3 runs gc while dispatches
-are live): a checkout is excluded from the plan if its slug matches a live (`Up`) container,
-or if `<locks_dir>/<slug>.pid` names a live process — the clone-before-`docker run` and
-cleanup-after-`docker rm` windows. With docker down, liveness cannot be verified, so the
-container class is not reported at all and every remaining item is marked undeletable. A
-checkout in use in any way those two signals cannot see — a human working inside it, a
-container named off-convention — is reported as an orphan; the port source's only further
-protection is on the deletion side (`run.sh` re-checks both signals immediately before each
-removal, and salvages the branch by fetch, skipping loudly if it is not a fast-forward),
-which F3 inherits as a requirement, not as code that exists here.
+are live): a checkout is excluded from the plan if `classify_liveness` reads its slug as
+`IN_FLIGHT` — a live lock, per ADR 0004, never a live container alone (see below). With
+docker down, liveness cannot be verified, so the container class is not reported at all and
+every remaining item is marked undeletable. A checkout in use in any way these two signals
+cannot see — a human working inside it, a container named off-convention — is reported as an
+orphan; the port source's only further protection is on the deletion side (`run.sh`
+re-checks both signals immediately before each removal, and salvages the branch by fetch,
+skipping loudly if it is not a fast-forward), which F3 inherits as a requirement, not as code
+that exists here.
+
+**`classify_liveness` is ADR 0004's twelve-cell table, and the only place it is written
+down.** A run's liveness is a property of its dispatcher (the pid in `<locks_dir>/<slug>.pid`),
+not of the container that pid may have started — a container can outlive the process that
+made it, `sleep infinity` in the adapter image being the tracer's own proof. The two signals
+compose asymmetrically: **`Up` is not proof of life; `Exited` is proof of death.** An exited
+container settles the question alone, no lock overrides it; anything else defers to the lock,
+and a lock this function cannot read is `UNVERIFIABLE` rather than guessed at either way.
+`bessemer/reclaim.py` imports this same function for its own per-item re-check rather than
+restating the table — ADR 0004's argued exception to this package's restate-rather-than-import
+rule, because a twelve-cell decision table copied twice is how a scan and an executor disagree
+about the same slug without either being wrong on its own terms.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Final
 
@@ -73,6 +86,65 @@ or gc will never see what it leaks.
 _GC_DELETABLE_CLASSES: Final = frozenset({"container", "checkout", "lock"})
 """The classes `render_gc_plan` will put in a plan — the three gc can act on. Logs are
 deliberately not one (see `summarize_logs`), and `tests/test_gc.py` pins this set by hand."""
+
+
+class Liveness(Enum):
+    """What `classify_liveness` decided a slug's run is, of the three ADR 0004 names."""
+
+    IN_FLIGHT = "in-flight"
+    """The dispatcher is alive. Every one of the slug's artifacts is hidden from the plan."""
+
+    ORPHAN = "orphan"
+    """No dispatcher owns this slug's artifacts. What gc lists and reclaim reclaims."""
+
+    UNVERIFIABLE = "unverifiable"
+    """The lock could not be read, so the dispatcher's liveness cannot be answered either
+    way. Kept, and said out loud — the same posture `reclaim.py` already held for a docker
+    that could not answer, now covering the lock half too."""
+
+
+@dataclass(frozen=True)
+class Classification:
+    """One slug's liveness, and why — ADR 0004's answer, carried rather than re-derived so
+    `gc` and `reclaim` cannot read the same facts and disagree."""
+
+    liveness: Liveness
+    reason: str
+
+
+def classify_liveness(
+    *, container_status: str | None, lock_pid_alive: bool | None
+) -> Classification:
+    """ADR 0004's twelve-cell table: what state a slug's run is in, from its container's
+    docker status (`None` for no container, otherwise the raw `docker ps` status text) and
+    its lock's pid (`True` alive, `False` no lock file or a dead pid, `None` the lock file
+    exists but could not be read).
+
+    `Exited` settles the question alone, in **one direction only**: it is checked first and
+    nothing after it can override an orphan verdict. Every other container state — `Up` or no
+    container at all — defers entirely to the lock, because neither is proof that a
+    dispatcher is watching. A lock this function cannot read is `UNVERIFIABLE` rather than
+    guessed at either way, and that check runs before the live-pid check so an unreadable
+    lock is never misread as a dead one.
+
+    The function is handed the facts; it does not go and get them — `gc.py` stays pure, and
+    `reclaim.py`'s own liveness probe (`docker ps -q`, no `-a`) cannot distinguish an exited
+    container from no container at all, so it calls this with `container_status=None` for
+    "not `Up` right now" rather than claiming `Exited`. That is the safe direction: it defers
+    to the lock exactly where `gc`'s richer, `-a`-backed scan would already defer to it, and
+    the one cell where this could differ from a true `Exited` reading — a live pid, which
+    `Exited` would still call an orphan — is `IN_FLIGHT`'s own reason for existing: the
+    re-check window between a scan and a delete is exactly what a dispatch starting mid-gc
+    looks like, and keeping a slug whose lock just went live is the correct read regardless
+    of whether the container behind it has come up yet.
+    """
+    if container_status is not None and not is_live_status(container_status):
+        return Classification(Liveness.ORPHAN, "the container has exited")
+    if lock_pid_alive is None:
+        return Classification(Liveness.UNVERIFIABLE, "the lock could not be read")
+    if lock_pid_alive:
+        return Classification(Liveness.IN_FLIGHT, "the lock names a live pid")
+    return Classification(Liveness.ORPHAN, "no live dispatcher owns it")
 
 
 @dataclass
@@ -108,80 +180,132 @@ def _human_size(num_bytes: int) -> str:
     return f"{size:.1f}G"
 
 
-def _lock_pid_alive(locks_dir: Path, slug: str) -> bool:
-    """A live pid in `<locks_dir>/<slug>.pid` means a dispatch currently owns that slug's
-    artifacts even when no container exists yet (or anymore) — the clone-before-`docker run`
-    and cleanup-after-`docker rm` windows."""
+def _lock_pid_alive(locks_dir: Path, slug: str) -> bool | None:
+    """The lock half of `classify_liveness`'s second signal: `True` a live pid owns this
+    slug's artifacts (even with no container in sight — the clone-before-`docker run` and
+    cleanup-after-`docker rm` windows), `False` no lock file or a dead pid, `None` a lock
+    file that exists but could not be read.
+
+    **Absent and unreadable are different facts.** A missing lock is the ordinary case for
+    an orphan gc has always listed; a lock `read_text` cannot get through is a fact this
+    function cannot answer past, and collapsing the two into one `except OSError: return
+    False` — as this used to — would report a definite orphan for a slug this process
+    simply could not check, which is exactly what `UNVERIFIABLE` exists to refuse."""
     try:
         pid_text = (locks_dir / f"{slug}.pid").read_text()
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError:
+        return None
     return pid_alive(pid_text)
+
+
+_LOCK_UNREADABLE: Final = "could not be read, unverified"
+"""What an `UNVERIFIABLE` item's `would` field names, paired at the call site with the
+lock's own path so the sentence points at the file an operator would go look at rather than
+just asserting one exists. Private: nothing outside `_unverified_would` composes this."""
+
+
+def _unverified_would(locks_dir: Path, slug: str) -> str:
+    """The sentence an `UNVERIFIABLE` item is kept under: names the lock, the artifact stays
+    put, and says why — the acceptance the ADR itself insists on for a deletion nobody could
+    verify was safe."""
+    return f"kept — the lock ({locks_dir / f'{slug}.pid'}) {_LOCK_UNREADABLE}"
 
 
 def collect_gc_items(
     *, checkouts_dir: Path, locks_dir: Path, docker_rows: list[str], docker_down: bool
 ) -> list[GcItem]:
     """Every artifact in the three actionable gc classes (containers, checkouts, locks),
-    orphan-filtered per class (the port source's `docs/AGENT_SANDBOXING.md` gc section has
-    the definitions — unported). Logs aren't items: every past run leaves a .log behind
-    forever, so per-log rows would grow monotonically and drown the classes gc can act on —
-    they're one `summarize_logs` line instead. `docker_down` disables both the container
-    class (nothing to report — `docker ps -a` never ran) and deletability everywhere else
-    (liveness can't be verified, so nothing computed here is ever safe to delete)."""
-    containers = [] if docker_down else parse_docker_rows(docker_rows)
-    live_slugs = {c.slug for c in containers if is_live_status(c.uptime)}
+    classified per slug by `classify_liveness` (ADR 0004) rather than by container status
+    alone. Logs aren't items: every past run leaves a .log behind forever, so per-log rows
+    would grow monotonically and drown the classes gc can act on — they're one
+    `summarize_logs` line instead. `docker_down` disables both the container class (nothing
+    to report — `docker ps -a` never ran) and deletability everywhere else (liveness can't be
+    verified, so nothing computed here is ever safe to delete).
+
+    `IN_FLIGHT` hides a slug's artifacts, exactly as before. `ORPHAN` lists them, deletable
+    when docker is up. `UNVERIFIABLE` — a lock this process could not read — also lists them,
+    loudly and never deletable, rather than silently excluding or silently including them:
+    ADR 0004's "kept, and said out loud" applies to gc's listing as much as to reclaim's walk.
+    """
+    containers: dict[str, str] = (
+        {} if docker_down else {c.slug: c.uptime for c in parse_docker_rows(docker_rows)}
+    )
     deletable = not docker_down
+
+    def classify(slug: str) -> Classification:
+        return classify_liveness(
+            container_status=containers.get(slug),
+            lock_pid_alive=_lock_pid_alive(locks_dir, slug),
+        )
 
     items = []
 
-    for c in sorted(
-        (c for c in containers if not is_live_status(c.uptime)), key=lambda c: c.slug
-    ):
+    for slug in sorted(containers):
+        classification = classify(slug)
+        if classification.liveness is Liveness.IN_FLIGHT:
+            continue
+        would = (
+            f"docker rm -fv {CONTAINER_PREFIX}{slug}"
+            if classification.liveness is Liveness.ORPHAN
+            else _unverified_would(locks_dir, slug)
+        )
         items.append(
             GcItem(
                 "container",
-                c.slug,
-                c.uptime or "?",
+                slug,
+                containers[slug] or "?",
                 "-",
-                f"docker rm -fv {CONTAINER_PREFIX}{c.slug}",
-                deletable,
+                would,
+                deletable and classification.liveness is Liveness.ORPHAN,
             )
         )
 
     if checkouts_dir.is_dir():
         for d in sorted(checkouts_dir.iterdir()):
-            if not d.is_dir() or d.name in live_slugs:
+            if not d.is_dir():
                 continue
-            if _lock_pid_alive(locks_dir, d.name):
-                # A dispatch owns this checkout in its pre/post-container window —
-                # not an orphan.
+            classification = classify(d.name)
+            if classification.liveness is Liveness.IN_FLIGHT:
                 continue
+            would = (
+                "salvage-fetch then rm -rf (skips + flags for manual inspection if non-FF)"
+                if classification.liveness is Liveness.ORPHAN
+                else _unverified_would(locks_dir, d.name)
+            )
             items.append(
                 GcItem(
                     "checkout",
                     d.name,
                     mtime_age(d),
                     _human_size(_dir_size(d)),
-                    "salvage-fetch then rm -rf (skips + flags for manual inspection if non-FF)",
-                    deletable,
+                    would,
+                    deletable and classification.liveness is Liveness.ORPHAN,
                 )
             )
 
     if locks_dir.is_dir():
         for p in sorted(locks_dir.glob("*.pid")):
             slug = p.stem
-            if slug in live_slugs:
+            classification = classify(slug)
+            if classification.liveness is Liveness.IN_FLIGHT:
                 continue
-            try:
-                pid_text = p.read_text()
-            except OSError:
-                pid_text = ""
-            if pid_alive(pid_text):
-                # Process still running (just hasn't reached the container step yet) —
-                # not stale.
-                continue
-            items.append(GcItem("lock", slug, mtime_age(p), "-", "rm -f", deletable))
+            would = (
+                "rm -f"
+                if classification.liveness is Liveness.ORPHAN
+                else _unverified_would(locks_dir, slug)
+            )
+            items.append(
+                GcItem(
+                    "lock",
+                    slug,
+                    mtime_age(p),
+                    "-",
+                    would,
+                    deletable and classification.liveness is Liveness.ORPHAN,
+                )
+            )
 
     return items
 
