@@ -562,7 +562,10 @@ composes; `12` is HITL, the human runs it.
 | `10` | Dispatch: orchestrator, CLI `run`, lock, cleanup, ledger, debt 3 | 01, 02, 03, 04, 06, 07, 08, 09 |
 | `11` | Reclaim: `gc --force`, the debt 4 pins | 04 |
 | `12` | Tracer: tier-3 suite + runbook | 10, 11 |
-| `13` | Orphans: liveness is the dispatcher's ([ADR 0004](../../../docs/adr/0004-run-liveness.md)) | 11, 12 |
+| ~~`13`~~ | ~~Orphans: liveness is the dispatcher's~~ — split 2026-08-07, see the issue for why | 11, 12 |
+| `13a` | Orphan classification ([ADR 0004](../../../docs/adr/0004-run-liveness.md)), gc's scan and reclaim's walk | 11, 12 |
+| `13b` | The dispatch guard stops wedging the branch | 13a |
+| `13c` | Status stops calling a dead run Running | 13a |
 
 `10`'s eight blockers are deliberate: the alternative — splitting guards+CLI from the
 lifecycle — would ship a `run` subcommand that guards and then cannot dispatch, exactly
