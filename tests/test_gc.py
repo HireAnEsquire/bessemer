@@ -111,7 +111,12 @@ class CollectGcItemsTest(unittest.TestCase):
 
     @ported_from("CollectGcItemsTests", "test_running_container_is_excluded")
     def test_a_running_container_is_excluded(self) -> None:
-        items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
+        """ADR 0004: same divergence as the checkout counterpart above — a live lock is what
+        makes this genuinely in-flight, not the container's `Up` status by itself."""
+        (self.locks_dir / "my-branch.pid").write_text("1")
+
+        with mock.patch.object(gc, "pid_alive", return_value=True):
+            items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
 
         self.assertEqual(items, [])
 
@@ -164,9 +169,15 @@ class CollectGcItemsTest(unittest.TestCase):
 
     @ported_from("CollectGcItemsTests", "test_checkout_with_live_container_is_excluded")
     def test_a_checkout_with_a_live_container_is_excluded(self) -> None:
+        """ADR 0004: `Up` alone no longer excludes anything — a live lock is what proves
+        in-flight now, per the tracer's own finding that an `Up` container outlives a killed
+        dispatcher. Upstream's fixture named only the container; a live lock is added here
+        so the scenario this test's name promises (a genuinely live run) is what it tests."""
         (self.checkouts_dir / "my-branch").mkdir()
+        (self.locks_dir / "my-branch.pid").write_text("1")
 
-        items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
+        with mock.patch.object(gc, "pid_alive", return_value=True):
+            items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
 
         self.assertEqual(items, [])
 
@@ -220,12 +231,66 @@ class CollectGcItemsTest(unittest.TestCase):
         "CollectGcItemsTests", "test_lock_with_live_container_excluded_even_if_pid_dead"
     )
     def test_a_lock_with_a_live_container_is_excluded_even_with_a_dead_pid(self) -> None:
+        """ADR 0004, the tracer's own bug, pinned as a test: upstream's assumption here — that
+        any `Up` container excludes a slug's artifacts regardless of what its lock says — is
+        exactly what a `kill -9` dispatcher exploited. The adapter image's entrypoint is
+        `sleep infinity`, so the container it leaves behind outlives the process that made it
+        indefinitely; excluding on `Up` alone hid the container, the checkout and the lock
+        from `gc` forever. `Up` is not proof of life — only the lock is, and here it names a
+        dead pid, so this is now an orphan gc must list rather than a run gc must hide."""
         (self.locks_dir / "my-branch.pid").write_text("999999")
 
         with mock.patch.object(gc, "pid_alive", return_value=False):
             items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
 
-        self.assertEqual(items, [])
+        self.assertEqual(
+            [(i.cls, i.slug) for i in items],
+            [("container", "my-branch"), ("lock", "my-branch")],
+        )
+        self.assertEqual([i.deletable for i in items], [True, True])
+
+    def test_the_tracers_scenario_lists_the_container_the_checkout_and_the_lock(self) -> None:
+        """The measurement ADR 0004 records, scripted whole: a `kill -9` dispatcher leaves an
+        `Up` container over a dead lock pid, and every one of that run's artifacts —
+        container, checkout and lock — must surface as reclaimable rather than vanish
+        permanently. Order matters too and is asserted here rather than left implicit:
+        `reclaim` removes the container before it salvages the checkout (ADR 0004, "container
+        removal precedes checkout salvage"), because the container may still hold a writer
+        that has to stop before the checkout is rescued."""
+        (self.checkouts_dir / "my-branch").mkdir()
+        (self.locks_dir / "my-branch.pid").write_text("999999")
+
+        with mock.patch.object(gc, "pid_alive", return_value=False):
+            items = self.collect(docker_rows=("bessemer-my-branch\tUp 5 minutes",))
+
+        self.assertEqual(
+            [(i.cls, i.slug) for i in items],
+            [("container", "my-branch"), ("checkout", "my-branch"), ("lock", "my-branch")],
+        )
+        self.assertEqual([i.deletable for i in items], [True, True, True])
+
+    def test_an_unreadable_lock_keeps_the_checkout_and_the_lock_and_names_it(self) -> None:
+        """ADR 0004's `UNVERIFIABLE`: a lock that exists but cannot be read settles nothing,
+        so the checkout it might own — and the lock file itself, gc's own third class — are
+        kept rather than guessed at either way, and never deletable, docker up or not. `.pid`
+        as a directory forces `read_text` into an `OSError` no `FileNotFoundError` branch
+        catches, without depending on a permission model this suite must run the same way
+        under any user (`tests/README.md`)."""
+        (self.checkouts_dir / "mystery").mkdir()
+        (self.locks_dir / "mystery.pid").mkdir()
+
+        items = self.collect()
+
+        self.assertEqual([i.cls for i in items], ["checkout", "lock"])
+        self.assertEqual([i.deletable for i in items], [False, False])
+        for item in items:
+            self.assertIn(str(self.locks_dir / "mystery.pid"), item.would)
+            self.assertIn("unverified", item.would)
+
+    def test_the_lock_unreadable_sentence_is_the_pin(self) -> None:
+        """Hand-written whole: the exact words an operator reads before trusting that an item
+        nobody could verify was safe to leave alone."""
+        self.assertEqual(gc._LOCK_UNREADABLE, "could not be read, unverified")
 
     @ported_from("CollectGcItemsTests", "test_logs_are_never_items")
     def test_logs_are_never_items(self) -> None:
@@ -233,6 +298,69 @@ class CollectGcItemsTest(unittest.TestCase):
         (self.logs_dir / "old.log.1").write_text("rotated")
 
         self.assertEqual(self.collect(), [])
+
+
+class ClassifyLivenessTest(unittest.TestCase):
+    """ADR 0004's twelve-cell table, pinned by one hand-written literal — not derived from
+    `classify_liveness` itself, and not restated per module (`gc`, `reclaim` and, in 13b,
+    `dispatch` and `status` all import the one function this table pins).
+
+    `container` is `None` (absent), `"Up 5 minutes"` (a live docker status) or `"Exited (0) 1
+    hour ago"` (a dead one) — `is_live_status`'s own contract, not re-derived here. `lock` is
+    `True` (a live pid), `False` (no lock file, or a dead pid) or `None` (the lock exists but
+    could not be read) — `reclaim._container_live`'s `bool | None` shape, which this issue
+    gives the lock half of the same table.
+    """
+
+    ABSENT = None
+    UP = "Up 5 minutes"
+    EXITED = "Exited (0) 1 hour ago"
+
+    IN_FLIGHT = gc.Liveness.IN_FLIGHT
+    ORPHAN = gc.Liveness.ORPHAN
+    UNVERIFIABLE = gc.Liveness.UNVERIFIABLE
+
+    # (container label, container status, lock column label, lock signal, expected). Every
+    # one of ADR 0004's twelve cells, in the table's own row-major order — a list rather than
+    # a dict keyed on (container, lock) because "lock absent" and "dead pid" hand the
+    # function the same `False`, and a dict would silently collapse those two rows into one,
+    # which is exactly the kind of thing this test exists to catch elsewhere.
+    TABLE = [
+        ("absent", ABSENT, "lock absent", False, ORPHAN),
+        ("absent", ABSENT, "dead pid", False, ORPHAN),
+        ("absent", ABSENT, "live pid", True, IN_FLIGHT),
+        ("absent", ABSENT, "unreadable", None, UNVERIFIABLE),
+        ("Up", UP, "lock absent", False, ORPHAN),
+        ("Up", UP, "dead pid", False, ORPHAN),  # the tracer's case
+        ("Up", UP, "live pid", True, IN_FLIGHT),
+        ("Up", UP, "unreadable", None, UNVERIFIABLE),
+        ("Exited", EXITED, "lock absent", False, ORPHAN),
+        ("Exited", EXITED, "dead pid", False, ORPHAN),
+        ("Exited", EXITED, "live pid", True, ORPHAN),  # the reboot cell
+        ("Exited", EXITED, "unreadable", None, ORPHAN),
+    ]
+
+    def test_the_table_has_twelve_rows(self) -> None:
+        """The count itself is part of what is pinned — a row silently dropped from `TABLE`
+        would otherwise still leave this test green."""
+        self.assertEqual(len(self.TABLE), 12)
+
+    def test_the_twelve_cells_match_adr_0004(self) -> None:
+        for container_label, container, lock_label, lock, expected in self.TABLE:
+            with self.subTest(container=container_label, lock=lock_label):
+                result = gc.classify_liveness(container_status=container, lock_pid_alive=lock)
+                self.assertEqual(result.liveness, expected)
+
+    def test_the_reboot_cell_an_exited_container_with_a_reused_live_pid_is_an_orphan(
+        self,
+    ) -> None:
+        """The cell ADR 0004 names as the one most likely to be skipped: `Exited` is proof of
+        death, and no lock — not even one whose pid a reboot happened to recycle onto a live,
+        unrelated process — overrides it. Without this half, making the lock authoritative
+        would hide orphans today's code already lists."""
+        result = gc.classify_liveness(container_status=self.EXITED, lock_pid_alive=True)
+
+        self.assertEqual(result.liveness, gc.Liveness.ORPHAN)
 
 
 class SummarizeLogsTest(unittest.TestCase):

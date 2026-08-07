@@ -12,16 +12,25 @@ Oracle region: `run.sh:422–523` at the pin.
 
 Between the `docker ps` gc scanned with and the moment an item is touched, a dispatch can
 start. So **every item is re-checked immediately before anything happens to it**, against the
-same two signals the scan itself excluded on (pin :462–474):
+same two signals the scan itself classified on (pin :462–474, sharpened by ADR 0004):
 
-1. a live container named `bessemer-<slug>`, and
-2. a live pid in `<locks_dir>/<slug>.pid` — the clone-before-`docker run` and
+1. whether a container named `bessemer-<slug>` is `Up` right now, and
+2. the pid in `<locks_dir>/<slug>.pid` — the clone-before-`docker run` and
    cleanup-after-`docker rm` windows, where a dispatch owns a slug's artifacts with no
    container anywhere in sight.
 
-Either one keeps the item, loudly. A re-check hoisted out of the loop would be a scan-time
-snapshot wearing a re-check's name, and `tests/test_reclaim.py` counts the probes for that
-reason.
+`gc.classify_liveness` (ADR 0004) turns those two into the same three-way verdict the scan
+used, imported rather than restated so a re-check cannot disagree with the plan it is
+re-checking: a live lock pid keeps the item regardless of whether the container has caught up
+yet, an unreadable lock keeps it loudly as unverifiable, and — the tracer's own bug, one layer
+down from `gc.py`'s — a container merely being `Up` no longer keeps anything by itself; only a
+live lock does. `container_status` is passed as `"Up"` when the re-check's own docker probe
+(`docker ps -q`, no `-a`) sees the container running and `None` otherwise: that probe cannot
+tell an exited container from no container at all, and `None` is the safe reading of "not up
+right now" — the one row of the table where an unrelated dispatch starting mid-walk and a
+truly dead run both still defer to the lock. A re-check hoisted out of the loop would be a
+scan-time snapshot wearing a re-check's name, and `tests/test_reclaim.py` counts the probes
+for that reason.
 
 **One named divergence from the pin, in the safe direction.** The pin reads its re-check
 through a command substitution, so a `docker ps` that *failed* yields the empty string and is
@@ -88,6 +97,7 @@ from typing import Final
 from bessemer import checkout as checkout_ops
 from bessemer import container as container_ops
 from bessemer import proc
+from bessemer.gc import Liveness, classify_liveness
 from bessemer.status import CONTAINER_PREFIX, pid_alive
 
 _PLAN_SEPARATOR: Final = "\t"
@@ -117,6 +127,18 @@ BANNER: Final = (
 It promises the re-check, which is what tells a reader why a `skip` line can contradict the
 listing printed seconds earlier.
 """
+
+_ORPHANED_WHILE_UP: Final = "was Up — its dispatcher is gone, orphaned"
+"""What a removed container's line names when the re-check found it still `Up` (ADR 0004's
+tracer case). Private, unlike the two above: nothing outside this module decides where this
+text goes, it is always part of an `Outcome.line` composed here. The words matter on their
+own terms — "removed container" alone reads as an ordinary already-stopped cleanup, and this
+is the one case where the container looked alive a moment before it was deleted."""
+
+_LOCK_UNREADABLE: Final = "could not be read, liveness unverified"
+"""What a kept item's line names when its lock exists but `_lock_pid` could not read it —
+ADR 0004's `UNVERIFIABLE`. Paired with the lock's own path at the call site so the sentence
+names the file an operator would go look at, not just the fact that one exists."""
 
 
 class Action(Enum):
@@ -240,17 +262,23 @@ def _container_live(item: _Item) -> bool | None:
     return bool(result.stdout.strip())
 
 
-def _lock_pid(item: _Item) -> str:
-    """The pid text in this item's lock file, or empty when there is none to read.
+def _lock_pid(item: _Item) -> tuple[str, bool]:
+    """The pid text in this item's lock file, and whether the file was readable at all.
 
     Read here rather than through `gc._lock_pid_alive` because the pid itself goes into the
     skip line: "a live run (pid 4131) owns it now" is a sentence an operator can act on, and
-    a boolean is not.
+    a boolean is not. The second element carries the same absent/unreadable distinction that
+    function draws for the same reason ADR 0004 draws it there: a missing lock is the
+    ordinary shape of an orphan, but a lock that exists and cannot be read must not be read as
+    "no lock, proceed" — that was this module's own gap before ADR 0004, silently deleting
+    whatever a lock it could not open might have named live.
     """
     try:
-        return item.lock.read_text().strip()
+        return item.lock.read_text().strip(), True
+    except FileNotFoundError:
+        return "", True
     except OSError:
-        return ""
+        return "", False
 
 
 def execute_gc_plan(
@@ -327,39 +355,61 @@ def execute_gc_plan(
                 " not touching",
             )
             continue
-        if live:
+
+        pid, lock_readable = _lock_pid(item)
+        if not lock_readable:
             record(
                 cls,
                 slug,
                 Action.KEPT,
-                f"  skip {cls}/{slug} — container is live now, not touching",
+                f"  skip {cls}/{slug} — the lock ({item.lock}) {_LOCK_UNREADABLE},"
+                " not touching",
             )
             continue
+        lock_pid_alive = bool(pid) and pid_alive(pid)
 
-        pid = _lock_pid(item)
-        if pid and pid_alive(pid):
+        classification = classify_liveness(
+            container_status="Up" if live else None, lock_pid_alive=lock_pid_alive
+        )
+        if classification.liveness is Liveness.IN_FLIGHT:
             record(
                 cls,
                 slug,
                 Action.KEPT,
-                f"  skip {cls}/{slug} — a live run (pid {pid}) owns it now, not touching",
+                f"  skip {cls}/{slug} — container is live now, not touching"
+                if live
+                else f"  skip {cls}/{slug} — a live run (pid {pid}) owns it now, not touching",
             )
             continue
 
-        action, line = _ACTIONS[cls](item)
+        if cls == "container":
+            action, line = _reclaim_container(item, was_up=live)
+        else:
+            action, line = _ACTIONS[cls](item)
         record(cls, slug, action, line)
 
     return ReclaimReport(outcomes=tuple(outcomes), refused=False)
 
 
-def _reclaim_container(item: _Item) -> tuple[Action, str]:
+def _reclaim_container(item: _Item, *, was_up: bool = False) -> tuple[Action, str]:
     """`docker rm -fv bessemer-<slug>` (pin :481–486).
 
     `container.remove` rather than a second `docker rm` here: that function owns the flags and
     already never raises on docker's exit status, which is the behaviour this walk needs.
+
+    `was_up` says whether the re-check immediately before this call still found the container
+    `Up` — ADR 0004's tracer case, where a dead lock is what settled the orphan verdict, not
+    the container's own status. The removal line has to say so rather than read as an
+    ordinary already-stopped cleanup: "removed container" alone is true of both, and only one
+    of them is a container someone might have assumed was still doing something.
     """
     result = container_ops.remove(container=item.container, run=item.run)
     if result.ok:
+        if was_up:
+            return (
+                Action.RECLAIMED,
+                f"  removed container {item.container} ({_ORPHANED_WHILE_UP})",
+            )
         return Action.RECLAIMED, f"  removed container {item.container}"
     return Action.FAILED, f"  !! failed to remove container {item.container}"
 

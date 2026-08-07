@@ -274,7 +274,13 @@ class LivenessRecheckTest(ReclaimTestCase):
     touched (pin :462–474). Two signals, both of them the scan's own."""
 
     def test_a_container_that_went_live_since_the_scan_is_skipped_untouched(self) -> None:
+        """ADR 0004: a container alone going `Up` since the scan is not what keeps this any
+        more — a real dispatch starting mid-walk writes its lock before it runs `docker run`,
+        so a live lock is what a genuine race leaves behind, and is what this fixture now
+        gives it (this process's own pid, a real answer from the signal-0 probe rather than a
+        patched one — `os.getpid()` is always alive)."""
         checkout = self.checkout("racy")
+        self.lock("racy", pid=str(os.getpid()))
         double = Double(said(LIVE))
 
         report = self.execute("checkout\tracy", double)
@@ -359,6 +365,31 @@ class LivenessRecheckTest(ReclaimTestCase):
                     [outcome.action for outcome in report.outcomes], [reclaim.Action.KEPT]
                 )
 
+    def test_an_unreadable_lock_keeps_the_item_and_names_it(self) -> None:
+        """ADR 0004's `UNVERIFIABLE`, and reclaim's own gap before this fix: a lock file that
+        exists but could not be read used to fall through as `pid=""`, which reads exactly
+        like "no lock, safe to delete" — silently reclaiming whatever a lock it could not
+        open might have named live. `.pid` as a directory forces the same unreadable
+        `OSError` `tests/test_gc.py`'s own unreadable-lock test uses, without depending on a
+        permission model this suite must run the same way under any user."""
+        checkout = self.checkout("mystery")
+        (self.locks_dir / "mystery.pid").mkdir()
+        double = Double(said(""))
+
+        report = self.execute("checkout\tmystery", double)
+
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual([outcome.action for outcome in report.outcomes], [reclaim.Action.KEPT])
+        self.assertIn(str(self.locks_dir / "mystery.pid"), self.said)
+        self.assertIn("could not be read", self.said)
+        self.assertIn("unverified", self.said)
+
+    def test_the_lock_unreadable_sentence_is_the_pin(self) -> None:
+        """Hand-written whole, `test_the_refusal_sentence_is_the_pins`'s pattern: the exact
+        words an operator reads before trusting that an item nobody could verify was safe to
+        leave alone."""
+        self.assertEqual(reclaim._LOCK_UNREADABLE, "could not be read, liveness unverified")
+
 
 class ContainerTest(ReclaimTestCase):
     def test_a_dead_container_is_removed_with_rm_fv(self) -> None:
@@ -377,6 +408,32 @@ class ContainerTest(ReclaimTestCase):
             [outcome.action for outcome in report.outcomes], [reclaim.Action.RECLAIMED]
         )
         self.assertIn("removed container bessemer-stopped", self.said)
+
+    def test_an_up_container_with_a_dead_lock_pid_is_reclaimed_and_says_so(self) -> None:
+        """ADR 0004's tracer case, one layer down from `gc.py`'s: a container still `Up` at
+        the re-check is not, by itself, live any more — only its lock says that, and here the
+        lock names a dead pid. The removal line must say the container was `Up` and that its
+        dispatcher is gone; "removed container" alone reads as an ordinary already-stopped
+        cleanup, and this is not one."""
+        self.lock("orphaned", pid="999999")
+        double = Double(said(LIVE), said(""))
+
+        report = self.execute("container\torphaned", double)
+
+        self.assertEqual(
+            [outcome.action for outcome in report.outcomes], [reclaim.Action.RECLAIMED]
+        )
+        self.assertIn("removed container bessemer-orphaned", self.said)
+        self.assertIn("was Up", self.said)
+        self.assertIn("dispatcher is gone", self.said)
+
+    def test_the_orphaned_while_up_sentence_is_the_pin(self) -> None:
+        """Hand-written whole, `test_the_refusal_sentence_is_the_pins`'s pattern: the exact
+        words an operator reads before trusting that a container which looked alive a moment
+        ago was safe to remove."""
+        self.assertEqual(
+            reclaim._ORPHANED_WHILE_UP, "was Up — its dispatcher is gone, orphaned"
+        )
 
     def test_a_failed_removal_is_reported_and_the_run_continues(self) -> None:
         """Partial failure: the remaining items are still processed and the report is failed.
@@ -572,6 +629,32 @@ class CheckoutTest(ReclaimTestCase):
         for call in git_calls:
             with self.subTest(argv=call.argv):
                 self.assertEqual(call.cwd, self.repo_root)
+
+    def test_the_tracers_scenario_reclaims_everything_and_salvages_the_commit(self) -> None:
+        """ADR 0004's own measurement, walked end to end rather than merely listed: an `Up`
+        container over a dead lock pid — the tracer's `kill -9` — must have `gc --force`
+        actually remove the container, the checkout and the lock, and the checkout's unpushed
+        commit has to survive the `rm -rf` by landing on the branch first. That is the
+        property that makes deleting a checkout safe at all, and the tracer's own kill landed
+        before its agent committed, so it could never prove this live — this does."""
+        checkout = self.cloned("orphaned")
+        self.commit_in(checkout, "agent-work")
+        self.lock("orphaned", pid="999999")
+        before = self.head_of(self.BRANCH)
+
+        # One `docker ps` answer per plan line — container, checkout, then lock — plus the
+        # container's own `docker rm`; every git call in between is real (`Passthrough`).
+        double = Passthrough(said(LIVE), said(""), said(LIVE), said(LIVE))
+
+        report = self.execute("container\torphaned\ncheckout\torphaned\nlock\torphaned", double)
+
+        self.assertEqual(
+            [outcome.action for outcome in report.outcomes],
+            [reclaim.Action.RECLAIMED, reclaim.Action.RECLAIMED, reclaim.Action.RECLAIMED],
+        )
+        self.assertNotEqual(self.head_of(self.BRANCH), before)
+        self.assertFalse(checkout.exists())
+        self.assertFalse((self.locks_dir / "orphaned.pid").exists())
 
 
 class LogsUntouchedTest(ReclaimTestCase):
