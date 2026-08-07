@@ -79,7 +79,7 @@ class ParseDockerRowsTest(unittest.TestCase):
         self.assertEqual(status.parse_docker_rows([]), [])
 
 
-class StaleLocksTest(unittest.TestCase):
+class OrphanLocksTest(unittest.TestCase):
     """`stale_locks` is `orphan_locks` now (ADR 0004, issue 13c): the container has nothing
     to do with a lock's orphan status, only its pid does, so every fixture below drives that
     signal through a mocked `pid_alive` rather than a `running_slugs` set that no longer
