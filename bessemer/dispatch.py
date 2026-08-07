@@ -177,11 +177,24 @@ INFLIGHT_LOCK: Final = (
 INFLIGHT_CONTAINER: Final = (
     "{container} is already running — wait for it or 'docker rm -f {container}' first"
 )
-"""The in-flight guard's two layers, ported (`run.sh:1014`, `:1018`).
+"""The in-flight guard's two layers, ported (`run.sh:1014`, `:1018`) — wording unchanged by
+ADR 0004, only what decides between them did.
 
 A pid lock catches a live dispatch between docker calls — mid-pass, where no container
-question would find it — and the container check catches a run whose dispatcher is gone.
+question would find it — and the second layer is the same lock read fresh a moment later, for
+the narrow window between that read and this one. A container merely answering `Up` no longer
+reaches this message on its own: `gc.classify_liveness` (issue 13a) says whose question this
+is — the dispatcher's, never the container's — and `Up` with no live lock is `ORPHAN`,
+reclaimed below rather than refused.
 """
+
+UNVERIFIABLE_LOCK: Final = (
+    "cannot tell whether '{branch}' has a live dispatcher — the lock ({lock}) could not be "
+    "read; refusing rather than guessing"
+)
+"""ADR 0004's third answer. Nothing can be said about who owns the slug, and for a dispatch
+the do-nothing direction is refusal — the opposite of `gc`'s, which keeps the artifact instead
+of listing it. Both are "do nothing", pointed at what each command is doing."""
 
 LEDGER_BASE: Final = (
     "bessemer: --base omitted — using '{branch}' branch's last recorded base "
@@ -227,6 +240,13 @@ SPEC_LINE: Final = (
     "spec {spec}  |  branch {branch} ({mode})  |  base {base}  |  boundary {short}"
 )
 LOG_LINE: Final = "log: {log}  (tail -f it for raw output)"
+RECLAIM_LINE: Final = (
+    "'{branch}' is an orphan: its dispatcher is gone — reclaiming container {container} and "
+    "checkout {checkout} before this run starts"
+)
+"""ADR 0004's one new operator sentence: an unattended dispatch that reclaims an orphan during
+its guard sequence says so here, naming what it reclaimed. It is exactly the event an operator
+should find afterwards, and nothing else in the log would explain why a container vanished."""
 SHORT_SHA: Final = 10
 """How much of a commit the human-facing lines show (`${MERGE_BASE:0:10}`, `run.sh:1192`)."""
 
@@ -581,6 +601,21 @@ def _lock_pid(path: Path) -> str:
         return ""
 
 
+def _lock_pid_alive(path: Path) -> bool | None:
+    """The in-flight guard's own read of `classify_liveness`'s lock signal (ADR 0004):
+    `True`/`False` once the file is read (no file at all is `False`, the ordinary shape of an
+    orphan), `None` when it exists but could not be read. Read fresh here rather than through
+    `gc._lock_pid_alive` — that one is `gc`'s own, its module docstring says so — the shared
+    thing is `classify_liveness` itself, never the reading that feeds it."""
+    try:
+        pid_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError, UnicodeDecodeError:
+        return None
+    return status.pid_alive(pid_text)
+
+
 @dataclass
 class _Lock:
     """The run's pid file, created atomically. The fix for the pin's guard-then-write window.
@@ -919,14 +954,27 @@ def dispatch(
     lock = _Lock(path=locks_dir / f"{slug}{LOCK_SUFFIX}", pid=pid)
     work = checkouts_dir / slug
 
-    # The in-flight guard, both layers (`run.sh:1009–1021`). A lock whose pid is gone is not
+    # The in-flight guard, both layers (`run.sh:1009–1021`), reading issue 13a's classification
+    # rather than asking docker its own question (ADR 0004). A lock whose pid is gone is not
     # refused here — `_Lock.acquire` takes it over — because only a reader can tell a live run
     # from a crashed one, and a crashed one must not need a file deleted by hand.
     recorded_pid = _lock_pid(lock.path)
     if recorded_pid and status.pid_alive(recorded_pid):
         raise Refusal(INFLIGHT_LOCK.format(pid=recorded_pid, branch=branch))
-    if run(passes.liveness_argv(container=name), timeout=PS_TIMEOUT_SECONDS).stdout.strip():
+    probed = run(passes.liveness_argv(container=name), timeout=PS_TIMEOUT_SECONDS)
+    container_status = "Up" if probed.stdout.strip() else None
+    classification = gc.classify_liveness(
+        container_status=container_status, lock_pid_alive=_lock_pid_alive(lock.path)
+    )
+    if classification.liveness is gc.Liveness.IN_FLIGHT:
         raise Refusal(INFLIGHT_CONTAINER.format(container=name))
+    if classification.liveness is gc.Liveness.UNVERIFIABLE:
+        raise Refusal(UNVERIFIABLE_LOCK.format(branch=branch, lock=lock.path))
+    # ORPHAN: proceed rather than refuse — this is the wedge ADR 0004 closes. The stale
+    # cleanup a few lines below (inside the `try`) reclaims it; `reclaiming` is whether there
+    # is anything there to say so about, which `classification.liveness` alone cannot answer —
+    # an ordinary first dispatch of a branch classifies the same way.
+    reclaiming = lock.path.exists() or container_status == "Up" or work.exists()
 
     # --- Past here the tree is written to, so every exit path runs the cleanup below. ------
     console(
@@ -947,11 +995,13 @@ def dispatch(
 
     try:
         with raising_signals():
-            # Leftovers from a previous run of this branch that ended badly (`:1161–1162`).
-            # Inside the `try` rather than before it, where the pin has it: bash arms its trap
-            # last because `cleanup` reads variables that are not set until then, and Python has
-            # no such constraint — so a stale removal that fails releases the lock it just took
-            # instead of leaking it.
+            # An orphan from a previous run of this branch that ended badly (`:1161–1162`,
+            # ADR 0004). Inside the `try` rather than before it, where the pin has it: bash
+            # arms its trap last because `cleanup` reads variables that are not set until then,
+            # and Python has no such constraint — so a removal that fails releases the lock it
+            # just took instead of leaking it.
+            if reclaiming:
+                runlog.say(RECLAIM_LINE.format(branch=branch, container=name, checkout=work))
             container.remove(container=name, run=run)
             checkout.remove(work)
 

@@ -748,12 +748,16 @@ class GuardTest(DispatchTest):
 
         Asserted over the recorded stream as one list: each guard that spawns appears exactly
         once and in this order, and the in-flight `docker ps` is last — nothing may be written
-        before it answers.
+        before it answers. What still refuses there is a lock `gc.classify_liveness` (ADR 0004)
+        cannot read — a container answering `Up` no longer does, on its own.
         """
-        double = Double(answers={"docker ps": (said("c0ffee\n"),)})
+        self.locks.mkdir(parents=True)
+        self.lock.mkdir()
+        double = Double()
         self.assertEqual(
             self.refused(double),
-            f"{NAME} is already running — wait for it or 'docker rm -f {NAME}' first",
+            f"cannot tell whether '{BRANCH}' has a live dispatcher — the lock ({self.lock}) "
+            f"could not be read; refusing rather than guessing",
         )
         self.assertEqual(
             double.argvs,
@@ -788,6 +792,47 @@ class GuardTest(DispatchTest):
         outcome = self.dispatch(self.approved())
         self.assertEqual(outcome.branch, BRANCH)
         self.assertFalse(self.lock.exists())
+
+    def test_an_orphaned_container_is_reclaimed_rather_than_refused(self) -> None:
+        """The tracer's own case (ADR 0004): the container stayed `Up` after its dispatcher
+        died. `Up` alone no longer refuses — `gc.classify_liveness` (issue 13a) reads the dead
+        pid in the lock and calls the pair `ORPHAN`, so this proceeds: the stale cleanup a few
+        lines below removes both, and the run log names it."""
+        self.locks.mkdir(parents=True)
+        self.lock.write_text("2147483646\n", encoding="utf-8")
+        self.checkouts.mkdir(parents=True)
+        (self.work / "src").mkdir(parents=True)
+        (self.work / "src" / "file.py").write_text("orphaned work\n", encoding="utf-8")
+        double = Double(
+            Attempt(lines=transcript("implemented")),
+            Attempt(lines=transcript(f"looks right {VERDICT_TOKEN}")),
+            Attempt(lines=transcript("## Overview\n\nIt does the thing.")),
+            answers={"docker ps": (said("c0ffee\n"),)},
+        )
+
+        outcome = self.dispatch(double)
+
+        self.assertEqual(outcome.branch, BRANCH)
+        self.assertIn(("docker", "rm", "-f", "-v", NAME), double.argvs)
+        self.assertFalse((self.work / "src" / "file.py").exists())
+        self.assertIn(
+            f"'{BRANCH}' is an orphan: its dispatcher is gone — reclaiming container {NAME} "
+            f"and checkout {self.work} before this run starts",
+            self.log.read_text(encoding="utf-8"),
+        )
+
+    def test_an_unreadable_lock_refuses_rather_than_guessing(self) -> None:
+        """ADR 0004's third answer: nothing can be said about who owns the branch, and a
+        dispatch's do-nothing direction is refusal — the opposite of `gc`'s, which keeps the
+        artifact instead of listing it."""
+        self.locks.mkdir(parents=True)
+        self.lock.mkdir()
+        double = Double(answers={"docker ps": (said("c0ffee\n"),)})
+        self.assertEqual(
+            self.refused(double),
+            f"cannot tell whether '{BRANCH}' has a live dispatcher — the lock ({self.lock}) "
+            f"could not be read; refusing rather than guessing",
+        )
 
 
 class RefusedDispatchTest(DispatchTest):
@@ -824,14 +869,18 @@ class RefusedDispatchTest(DispatchTest):
         self.assertEqual(double.matching("docker", "ps"), [])
         self.assertEqual(double.matching("docker", "rm"), [])
 
-    def test_a_container_refusal_writes_nothing_either(self) -> None:
+    def test_an_unverifiable_lock_writes_nothing_either(self) -> None:
         self.live_run()
-        # No lock: the second layer of the guard is the subject, so the first must not answer.
+        # Unreadable rather than absent: the second layer of the guard is the subject, so the
+        # first must not answer, and a container answering `Up` no longer refuses by itself
+        # (ADR 0004) — only `gc.classify_liveness`'s UNVERIFIABLE does, and it must not tear
+        # down a run it could not identify either.
         self.lock.unlink()
+        self.lock.mkdir()
         before = snapshot(self.root)
         double = Double(answers={"docker ps": (said("c0ffee\n"),)})
 
-        self.assertIn("is already running", self.refused(double))
+        self.assertIn("cannot tell whether", self.refused(double))
 
         self.assertEqual(snapshot(self.root), before)
         self.assertEqual(double.argvs[-1], ("docker", "ps", "-q", "-f", f"name=^{NAME}$"))
