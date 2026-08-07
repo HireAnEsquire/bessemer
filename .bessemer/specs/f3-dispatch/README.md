@@ -410,8 +410,13 @@ arriving one step earlier, and `tests.test_container.StartTest` pins the orderin
       credential presence, image presence) → mkdir logs/checkouts/locks →
       `git fetch origin` → `BASE_SHA` → merge-base → inflight guard → lock → log rotate →
       stale cleanup → arm cleanup → clone → container → hook → passes → landing → notify →
-      ledger. **Nothing is touched before the inflight guard passes** (run.sh:1144–1148),
-      and the tier-2 refused-dispatch scenario asserts the absence on *both channels*:
+      ledger. **None of the run's own state is touched before the inflight guard passes**
+      (run.sh:1144–1148) — sharpened 2026-08-06 by the tracer, which found the sentence
+      overstated as first written: `mkdir` of `logs/`, `checkouts/` and `locks/` precedes
+      the guard, and so does `git fetch origin`, which moves `origin/*` in the main
+      repository. Both are port-faithful and neither is the run's state, which is what the
+      assertion below is about.
+      The tier-2 refused-dispatch scenario asserts the absence on *both channels*:
       recorded proc stream empty from the guard onward, AND tmp tree byte-identical (no
       lock, no rotation, no log write) — argv alone misses file writes. `git fetch
       origin` stays (a stale `origin/*` base is a wrong diff boundary); stale cleanup
@@ -511,6 +516,13 @@ arriving one step earlier, and `tests.test_container.StartTest` pins the orderin
    4. **Zero commits past boundary: no push, no PR — but the ledger line still
       appends** (empty `pr_url`; upstream's append is unconditional after the `if`).
       Distinct from decision 6.4's no-line-on-hard-failure; both pinned.
+
+      **"Past boundary" is not the number the console prints.** `DONE — N new commit(s)`
+      counts commits since the branch's *previous tip*, which is zero on any run that
+      added nothing — including a run that lands normally and updates an existing pull
+      request, because the branch still stands past the boundary. The tracer produced
+      exactly that pair, `DONE — 0 new commit(s)` beside `landed (existing PR updated)`,
+      and read as a contradiction of this clause until the two counts were told apart.
    5. **Doctor grows exactly F3's checks:** credential presence (one shared resolver
       with dispatch preflight — the pin's own `have_claude_credential` discipline, "not
       a second copy of the logic", :346); `gh` present + authenticated; image presence

@@ -228,11 +228,24 @@ tip*, decision 8.4 counts commits past the *boundary*. Worth one clarifying sent
 
 After the `kill -9`, `docker top` showed only `sleep infinity` — the `claude` process was gone.
 `bessemer/passes.py` carries upstream's measured comment that a host-side kill of the
-`docker exec` client leaves the in-container process running and wedges the container. Adjacent
-but not identical (that comment is about killing the exec client mid-run, this is the whole
-dispatcher dying), so it is recorded as an observation rather than as a contradiction. If the
-two are the same case, the comment's reasoning — which is why passes uses an in-container
-`timeout` — needs re-measuring.
+`docker exec` client leaves the in-container process running and wedges the container.
+
+**Re-measured 2026-08-07, on this adapter's image, and upstream's comment holds.** Two probes,
+each `docker exec`'d and then sent `kill -9` at the client: a `sleep 600` that writes nothing
+**survived**, and a bash loop writing a line per second **also survived**. So the in-container
+process is not reaped when its client dies, and the in-container `timeout` that `passes.py`
+wraps every pass in is doing exactly the job its comment claims.
+
+Which leaves the tracer's own observation as the outlier, and it is **unexplained**. The
+hypothesis — untested, because the container in question is gone — is that the deciding factor
+is the *program*: `bash` shrugs off a failed write and keeps looping, and the `claude` binary
+plausibly exits on one. If that is right, both observations are true and neither generalises.
+
+The consequence is not academic, and it changed [ADR 0004](adr/0004-run-liveness.md): the case
+for `gc --force` deleting an `Up` orphan was written assuming an agent *might* still be running
+inside it. On this measurement it probably is — burning credit against a run that can never
+land. The next tracer should settle it by checking `docker top` on the orphan before reclaiming
+it.
 
 ### 8. What the pre-tracer tier-3 suite caught, so the dogfood did not have to
 

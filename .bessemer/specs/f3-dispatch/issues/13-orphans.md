@@ -87,6 +87,11 @@ write and pin:
       the three `UNVERIFIABLE` arms
 - [ ] The tracer's exact scenario, scripted at tier 2: `Up` container + dead lock pid → `gc`
       lists three classes, `gc --force` reclaims them, `dispatch` proceeds instead of refusing
+- [ ] **In that scenario the checkout holds a commit the main repository does not**, and after
+      `gc --force` the branch points at it. The tracer could not prove this live — its kill
+      landed before the agent committed, so salvage was a no-op fast-forward — and "reclamation
+      does not discard work that exists nowhere else" is the property that makes deleting a
+      checkout safe at all. It should not wait on a well-timed kill
 - [ ] Reboot-shaped case: `Exited` container + a lock whose pid is **alive** (a reused pid) →
       orphan. This is the cell that stops the fix from hiding orphans it used to list
 - [ ] Container-before-checkout ordering asserted in the reclaim walk

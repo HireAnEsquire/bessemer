@@ -78,9 +78,11 @@ is inherited, and this ADR is the decision to stop inheriting it.
 - **`gc --force` deletes an orphaned container that is still `Up`.** *Rejected: report-only.*
   A run with no dispatcher has no future — decision 6.4 writes no ledger line for a hard-failed
   run, and F4's `--resume` is documented as unable to recover a run that never landed — so
-  nothing will ever collect that container's output, and if an agent process is still alive
-  inside it, it is spending money against a run nobody will land. Refusing would mean the human
-  runs the identical `docker rm -f`, which is the outcome this decision exists to remove.
+  nothing will ever collect that container's output. And an agent process is *likely* still
+  alive inside it, spending money against a run nobody will land: measured 2026-08-07 on this
+  adapter's image, an in-container process survives a `kill -9` of its `docker exec` client,
+  whether or not it is writing. Refusing would mean the human runs the identical `docker rm
+  -f`, which is the outcome this decision exists to remove.
   Uncommitted work is not a counter-argument: the checkout class already salvages
   fast-forward-only and then `rm -rf`s, so only committed work was ever rescuable.
 
